@@ -1,6 +1,6 @@
 import json, re, urllib.request, urllib.parse
 UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
-def get(url, headers=None, timeout=20):
+def get(url, headers=None, timeout=40):
     h={"User-Agent":UA}; h.update(headers or {})
     try:
         with urllib.request.urlopen(urllib.request.Request(url,headers=h),timeout=timeout) as r:
@@ -9,50 +9,41 @@ def get(url, headers=None, timeout=20):
         return e.code, e.read().decode("utf-8","replace")
     except Exception as e:
         return -1, repr(e)
-print("== iTunes search")
-ids=[]
-for term in ["Ed Maverick Así Fue","Ed Maverick Asi Fue Apple Music Sessions","Así Fue (Apple Music Sessions) Ed Maverick"]:
-    for c in ["US","MX","ES","TH"]:
-        s,b=get("https://itunes.apple.com/search?"+urllib.parse.urlencode({"term":term,"media":"music","entity":"song","country":c,"limit":10}))
-        try:
-            rs=json.loads(b)["results"]
-        except Exception:
-            print(c,term,s,b[:120]); continue
-        for r in rs:
-            if "maverick" in r.get("artistName","").lower():
-                print(c,"|",term[:25],"|",r["trackId"],r["trackName"],"|",r["collectionName"],"|",r.get("trackTimeMillis"))
-                ids.append(r["trackId"])
-print("== dev token")
+jwt=re.compile(r"eyJ[A-Za-z0-9_\-]{8,}\.eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}")
 s,h=get("https://music.apple.com/")
 print("html",s,len(h))
-jwt=re.compile(r"eyJhbGciOiJFUzI1NiI[A-Za-z0-9_\-]*\.eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+")
-m=jwt.search(urllib.parse.unquote(h))
-print("token in html:",bool(m))
-srcs=re.findall(r'src="([^"]*?/assets/[^"]*?\.js)"',h)
-print("scripts",srcs[:6])
-tok=m.group(0) if m else None
-if not tok:
-    for p in srcs[:4]:
-        s,js=get(urllib.parse.urljoin("https://music.apple.com/",p),timeout=40)
-        m=jwt.search(js); print(p,s,len(js),bool(m))
-        if m: tok=m.group(0); break
-print("token ok:",bool(tok))
-if tok and ids:
+for kw in ["developerToken","MEDIA_API","\"token\"","desktop-music-app","mediaToken","Bearer"]:
+    for m in list(re.finditer(re.escape(kw),h))[:2]:
+        print("HTML kw",kw,"::",h[max(0,m.start()-80):m.end()+160].replace("\n"," "))
+print("jwt in html:",[x[:40] for x in jwt.findall(urllib.parse.unquote(h))][:3])
+print("metas:",re.findall(r'<meta name="([^"]+)"',h)[:20])
+s,js=get("https://music.apple.com/assets/index~B8RKPfmaCI.js")
+print("index",s,len(js))
+print("jwt in index:",[x[:60] for x in jwt.findall(js)][:3])
+for kw in ["developerToken","MEDIA_API","Bearer","amp-api","ES256","eyJhbGci","authorization"]:
+    for m in list(re.finditer(re.escape(kw),js))[:2]:
+        print("JS kw",kw,"::",js[max(0,m.start()-120):m.end()+200].replace("\n"," "))
+chunks=sorted(set(re.findall(r'["\'`]([^"\'`\s]*?[A-Za-z0-9_~\-]+\.js)["\'`]',js)))
+print("chunk refs",len(chunks),chunks[:10])
+found=None
+for c in chunks[:80]:
+    url=urllib.parse.urljoin("https://music.apple.com/assets/",c.split("/")[-1]) if "/" not in c.lstrip("./") else urllib.parse.urljoin("https://music.apple.com/assets/",c)
+    s2,b=get(url,timeout=30)
+    if s2!=200: continue
+    m=jwt.search(b)
+    if m:
+        print("FOUND in",url,m.group(0)[:50],len(m.group(0))); found=m.group(0); break
+print("found",bool(found))
+if found:
     for sf in ["us","mx"]:
-        for i in sorted(set(ids))[:6]:
-            s,b=get(f"https://amp-api.music.apple.com/v1/catalog/{sf}/songs/{i}/syllable-lyrics",{"Authorization":"Bearer "+tok,"Origin":"https://music.apple.com","Referer":"https://music.apple.com/","media-user-token":"x"})
-            print("amp",sf,i,s,b[:160].replace("\n"," "))
-            s,b=get(f"https://amp-api.music.apple.com/v1/catalog/{sf}/songs/{i}",{"Authorization":"Bearer "+tok,"Origin":"https://music.apple.com"})
-            print(" song meta",sf,i,s,b[:100].replace("\n"," "))
-print("== lyricsplus")
-for base in ["https://lyricsplus.binimum.org","https://lyricsplus.atomix.one","https://lyricsplus-seven.vercel.app","https://lyricsplus.prjktla.workers.dev","https://lyrics-plus-backend.vercel.app"]:
-    q=urllib.parse.urlencode({"title":"Así Fue (Apple Music Sessions)","artist":"Ed Maverick","duration":"","source":"apple"})
-    s,b=get(base+"/v2/lyrics/get?"+q)
-    print(base,s,b[:200].replace("\n"," "))
-    q=urllib.parse.urlencode({"title":"Así Fue","artist":"Ed Maverick","source":"apple,lyricsplus,musixmatch-word,musixmatch"})
-    s,b=get(base+"/v2/lyrics/get?"+q)
-    print("  plain title",s,b[:200].replace("\n"," "))
-print("== paxsenix")
-for i in sorted(set(ids))[:6]:
-    s,b=get(f"https://lyrics.paxsenix.org/apple-music/lyrics?id={i}&v=2")
-    print(i,s,b[:150].replace("\n"," "))
+        s,b=get(f"https://amp-api.music.apple.com/v1/catalog/{sf}/songs/6833728368",{"Authorization":"Bearer "+found,"Origin":"https://music.apple.com"})
+        print("meta",sf,s,b[:200].replace("\n"," "))
+        s,b=get(f"https://amp-api.music.apple.com/v1/catalog/{sf}/songs/6833728368/syllable-lyrics",{"Authorization":"Bearer "+found,"Origin":"https://music.apple.com","media-user-token":"x"})
+        print("syl",sf,s,b[:200].replace("\n"," "))
+print("== lyricsplus variants")
+base="https://lyricsplus.binimum.org"
+for params in [{"title":"Así Fue","artist":"Ed Maverick"},{"title":"Así Fue (Apple Music Sessions)","artist":"Ed Maverick","album":"Sessions","duration":"345"},{"title":"Asi Fue","artist":"Ed Maverick","source":"apple"},{"title":"Así Fue","artist":"Ed Maverick","source":"apple,lyricsplus,musixmatch-word,musixmatch,spotify"},{"title":"Cuando Me Enamoro","artist":"Enrique Iglesias"}]:
+    s,b=get(base+"/v2/lyrics/get?"+urllib.parse.urlencode(params))
+    print(params,s,b[:260].replace("\n"," "))
+for path in ["/v2/lyrics/sources","/v1/lyrics/get"]:
+    s,b=get(base+path+"?title=Hello&artist=Adele"); print(path,s,b[:200].replace("\n"," "))
