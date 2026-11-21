@@ -33,6 +33,7 @@ internal class LyricsHttp(
         readTimeoutMs: Int = 6_500,
         headers: Map<String, String> = emptyMap(),
         postBody: String? = null,
+        truncate: Boolean = false,
     ): LyricsHttpResponse {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = if (postBody != null) "POST" else "GET"
@@ -57,17 +58,71 @@ internal class LyricsHttp(
             if (code !in 200..299) {
                 log("Lyrics: HTTP $code from $where")
                 LyricsHttpResponse(code, null)
-            } else if (connection.contentLengthLong > maxBytes) {
+            } else if (!truncate && connection.contentLengthLong > maxBytes) {
                 log("Lyrics: response from $where is larger than $maxBytes bytes")
                 LyricsHttpResponse(code, null)
             } else {
-                val body = connection.inputStream.use { it.readBoundedUtf8(maxBytes) }
+                val body = connection.inputStream.use { it.readBoundedUtf8(maxBytes, truncate) }
                 if (body == null) log("Lyrics: response from $where exceeded $maxBytes bytes")
                 LyricsHttpResponse(code, body)
             }
         } catch (error: IOException) {
             log("Lyrics: ${error.javaClass.simpleName} from $where (${error.message.orEmpty()})")
             LyricsHttpResponse(-1, null)
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    /**
+     * Streams a (possibly huge) response and returns the first value [find]
+     * extracts from it, without ever holding the whole body in memory. Used to
+     * read one token out of a multi-megabyte script. Stops reading at once on
+     * a hit, and gives up after [maxBytes].
+     */
+    fun scan(
+        url: String,
+        maxBytes: Int,
+        accept: String = "*/*",
+        connectTimeoutMs: Int = 4_000,
+        readTimeoutMs: Int = 15_000,
+        headers: Map<String, String> = emptyMap(),
+        carryChars: Int = 600,
+        find: (String) -> String?,
+    ): String? {
+        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout = connectTimeoutMs
+            readTimeout = readTimeoutMs
+            instanceFollowRedirects = true
+            setRequestProperty("Accept", accept)
+            setRequestProperty("User-Agent", userAgent)
+            headers.forEach { (name, value) -> setRequestProperty(name, value) }
+        }
+        val where = url.substringBefore('?')
+        return try {
+            val code = connection.responseCode
+            if (code !in 200..299) {
+                log("Lyrics: HTTP $code from $where")
+                return null
+            }
+            connection.inputStream.use { input ->
+                val buffer = ByteArray(32 * 1_024)
+                val window = StringBuilder()
+                var total = 0
+                while (total < maxBytes) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    total += count
+                    // ISO-8859-1 keeps byte and char offsets identical; tokens are ASCII.
+                    window.append(String(buffer, 0, count, Charsets.ISO_8859_1))
+                    find(window.toString())?.let { return it }
+                    if (window.length > carryChars) window.delete(0, window.length - carryChars)
+                }
+            }
+            null
+        } catch (error: IOException) {
+            log("Lyrics: ${error.javaClass.simpleName} from $where (${error.message.orEmpty()})")
+            null
         } finally {
             connection.disconnect()
         }
@@ -86,9 +141,10 @@ internal class LyricsHttp(
         attempts: Int = 1,
         headers: Map<String, String> = emptyMap(),
         postBody: String? = null,
+        truncate: Boolean = false,
     ): String? {
         for (attempt in 1..attempts) {
-            val response = get(url, maxBytes, accept, connectTimeoutMs, readTimeoutMs, headers, postBody)
+            val response = get(url, maxBytes, accept, connectTimeoutMs, readTimeoutMs, headers, postBody, truncate)
             if (response.body != null) return response.body
             val retryable = response.code == 429 || response.code in 500..599
             if (!retryable || attempt == attempts) return null
@@ -97,15 +153,19 @@ internal class LyricsHttp(
         return null
     }
 
-    private fun InputStream.readBoundedUtf8(maxBytes: Int): String? {
+    private fun InputStream.readBoundedUtf8(maxBytes: Int, truncate: Boolean): String? {
         val output = ByteArrayOutputStream()
         val buffer = ByteArray(8 * 1_024)
         var total = 0
         while (true) {
             val count = read(buffer)
             if (count < 0) break
+            if (total + count > maxBytes) {
+                if (!truncate) return null
+                output.write(buffer, 0, maxBytes - total)
+                break
+            }
             total += count
-            if (total > maxBytes) return null
             output.write(buffer, 0, count)
         }
         return output.toString(Charsets.UTF_8.name())

@@ -80,7 +80,7 @@ class AppleSourcesTest {
 
     @Test
     fun tokenHelpers() {
-        val jwt = "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJhYmMifQ.c2ln-_x"
+        val jwt = "eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzI1NiIsImtpZCI6IldlYlBsYXlLaWQifQ.eyJpc3MiOiJBTVBXZWJQbGF5IiwiaWF0IjoxfQ.c2lnbmF0dXJlLXNpZ25hdHVyZS1fLQ"
         assertEquals(jwt, AppleMusicDirectClient.findDeveloperToken("x=\"$jwt\";"))
         assertNull(AppleMusicDirectClient.findDeveloperToken("nothing"))
         assertEquals("abc123", AppleMusicDirectClient.normalizeUserToken("  media-user-token=abc123; other=1"))
@@ -102,5 +102,29 @@ class AppleSourcesTest {
             """{"message":{"body":{"translations_list":[{"translation":{"matched_line":"Hello, World!","description":"Hola, mundo"}}]}}}""",
         )
         assertEquals("Hola, mundo", map[LyricsTranslator.normalizeKey("hello world")])
+    }
+
+    @Test
+    fun streamedTokenIsNotCutOff() {
+        val jwt = "eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzI1NiIsImtpZCI6IldlYlBsYXlLaWQifQ.eyJpc3MiOiJBTVBXZWJQbGF5IiwiaWF0IjoxfQ.c2lnbmF0dXJlLXNpZ25hdHVyZS1fLQ"
+        val full = "const a=\"$jwt\";"
+        assertEquals(jwt, AppleMusicDirectClient.findCompleteDeveloperToken(full))
+        assertNull(AppleMusicDirectClient.findCompleteDeveloperToken(full.substring(0, full.length - 4)))
+        assertNull(AppleMusicDirectClient.findCompleteDeveloperToken("const a=\"" + jwt))
+    }
+
+    @Test
+    fun asiFueSessionsIsRankedFirst() {
+        val json = """{"resultCount":3,"results":[
+          {"trackId":1774311616,"trackName":"LA NUBE EN EL JARDÍN","artistName":"Ed Maverick","collectionName":"LA NUBE EN EL JARDÍN","trackTimeMillis":3229000},
+          {"trackId":1486681372,"trackName":"karpe diem (En Vivo)","artistName":"Ed Maverick","collectionName":"karpe diem (En Vivo) - Single","trackTimeMillis":388413},
+          {"trackId":6833728368,"trackName":"Así Fue (Apple Music Sessions)","artistName":"Ed Maverick","collectionName":"Sessions","trackTimeMillis":345232}]}"""
+        for (title in listOf("Así Fue (Apple Music Sessions)", "Asi Fue", "Así Fue")) {
+            val ids = AppleMusicLyricsClient.rankTrackIds(
+                json,
+                LyricsRequest(title, "Ed Maverick", "Sessions", 345_000L),
+            )
+            assertEquals("title=$title", 6833728368L, ids.firstOrNull())
+        }
     }
 }

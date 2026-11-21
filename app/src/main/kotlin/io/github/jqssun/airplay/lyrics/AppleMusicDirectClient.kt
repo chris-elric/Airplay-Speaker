@@ -24,35 +24,35 @@ internal class AppleMusicDirectClient(
     fun fetch(songId: Long, rawUserToken: String, translationLanguage: String): LyricsState? {
         val userToken = normalizeUserToken(rawUserToken)
         if (userToken.isEmpty()) return null
-        val storefront = storefront(userToken) ?: DEFAULT_STOREFRONT
+        val storefronts = listOf(storefront(userToken) ?: DEFAULT_STOREFRONT, DEFAULT_STOREFRONT).distinct()
 
-        for (endpoint in listOf("syllable-lyrics", "lyrics")) {
-            val url = "$AMP_BASE/v1/catalog/$storefront/songs/$songId/$endpoint"
-            var response = request(url, userToken)
-            if (response.code == 401 || response.code == 403) {
-                // The web token rotates; fetch a fresh one once.
-                developerToken = null
-                response = request(url, userToken)
-            }
-            when {
-                response.code == 401 || response.code == 403 -> {
-                    log("Lyrics: Apple Music rejected the saved media-user-token; paste a fresh one in Settings")
-                    return null
+        for (storefront in storefronts) {
+            for (endpoint in listOf("syllable-lyrics", "lyrics")) {
+                val url = "$AMP_BASE/v1/catalog/$storefront/songs/$songId/$endpoint"
+                var response = request(url, userToken)
+                if (response.code == 401 || response.code == 403) {
+                    // The web token rotates; fetch a fresh one once.
+                    developerToken = null
+                    response = request(url, userToken)
                 }
+                when {
+                    response.code == 401 || response.code == 403 -> {
+                        log("Lyrics: Apple Music rejected the request (HTTP ${response.code}); paste a fresh media-user-token in Settings")
+                        return null
+                    }
 
-                response.code == 404 -> continue
-                response.body == null -> return null
+                    response.code == 404 -> continue
+                    response.body == null -> return null
+                }
+                val ttml = extractTtml(response.body!!)
+                if (ttml.isBlank()) continue
+                val converted = AppleTtml.convert(ttml, translationLanguage) ?: continue
+                val state = AppleMusicLyricsClient.parseResponse(converted.json.toString(), songId) ?: continue
+                log("Lyrics: Apple Music $endpoint found for $songId in storefront $storefront")
+                return state.copy(writerCredit = converted.songwriters)
             }
-            val ttml = runCatching {
-                JSONObject(response.body!!)
-                    .optJSONArray("data")?.optJSONObject(0)
-                    ?.optJSONObject("attributes")?.optString("ttml")
-            }.getOrNull().orEmpty()
-            if (ttml.isBlank()) continue
-            val converted = AppleTtml.convert(ttml, translationLanguage) ?: continue
-            val state = AppleMusicLyricsClient.parseResponse(converted.json.toString(), songId) ?: continue
-            return state.copy(writerCredit = converted.songwriters)
         }
+        log("Lyrics: Apple Music has no lyrics for $songId on this account (token accepted, 404)")
         return null
     }
 
@@ -102,12 +102,15 @@ internal class AppleMusicDirectClient(
     private fun developerToken(): String? {
         developerToken?.let { return it }
         val headers = mapOf("User-Agent" to BROWSER_USER_AGENT)
+        // The page is ~2.4 MB but the bundle <script> tag sits in its first
+        // few KB, so only the head is downloaded.
         val html = http.requestText(
             "https://music.apple.com/",
-            maxBytes = 2 * 1024 * 1024,
+            maxBytes = HTML_HEAD_BYTES,
             accept = "text/html,application/xhtml+xml",
             readTimeoutMs = 8_000,
             headers = headers,
+            truncate = true,
         )
         if (html == null) {
             log("Lyrics: could not load music.apple.com to read the web token")
@@ -116,15 +119,13 @@ internal class AppleMusicDirectClient(
         findDeveloperToken(decodeUrl(html))?.let { return remember(it) }
 
         for (path in scriptPaths(html)) {
-            val script = http.requestText(
+            val token = http.scan(
                 absoluteUrl(path),
                 maxBytes = MAX_SCRIPT_BYTES,
-                accept = "*/*",
-                connectTimeoutMs = 4_000,
-                readTimeoutMs = 15_000,
                 headers = headers,
-            ) ?: continue
-            findDeveloperToken(script)?.let { return remember(it) }
+                find = ::findCompleteDeveloperToken,
+            )
+            if (token != null) return remember(token)
         }
         log("Lyrics: no Apple Music web token found; the player page may have changed")
         return null
@@ -139,17 +140,31 @@ internal class AppleMusicDirectClient(
         private const val AMP_BASE = "https://amp-api.music.apple.com"
         private const val DEFAULT_STOREFRONT = "us"
         private const val MAX_BYTES = 2 * 1024 * 1024
+        private const val HTML_HEAD_BYTES = 256 * 1024
         private const val MAX_SCRIPT_BYTES = 8 * 1024 * 1024
         private const val BROWSER_USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
                 "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
 
-        // ES256 JWT: header always begins with {"alg":"ES256"...
-        private val jwt = Regex("eyJhbGciOiJFUzI1NiI[A-Za-z0-9_-]*\\.eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+")
+        // The web player's ES256 token. Apple's header is {"typ":"JWT","alg":"ES256",
+        // "kid":"WebPlayKid"} today (base64 starts eyJ0eXAi); older builds put "alg" first.
+        private val jwt = Regex(
+            "eyJ(?:0eXAi|hbGci)[A-Za-z0-9_-]{10,}\\.eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{20,}",
+        )
         private val scriptSrc = Regex("src=\"([^\"]*?/assets/[^\"]*?\\.js)\"")
         private val cookiePair = Regex("media-user-token=([^;\\s]+)")
 
+        internal fun extractTtml(body: String): String = runCatching {
+            val attributes = JSONObject(body).optJSONArray("data")?.optJSONObject(0)
+                ?.optJSONObject("attributes") ?: return@runCatching ""
+            attributes.optString("ttml").ifBlank { attributes.optString("ttmlLocalizations") }
+        }.getOrDefault("")
+
         internal fun findDeveloperToken(text: String): String? = jwt.find(text)?.value
+
+        /** Like [findDeveloperToken] but ignores a token cut off by the end of a streamed chunk. */
+        internal fun findCompleteDeveloperToken(window: String): String? =
+            jwt.find(window)?.takeIf { it.range.last < window.length - 1 }?.value
 
         /** Main bundle first: that is where the token lives. */
         internal fun scriptPaths(html: String): List<String> = scriptSrc.findAll(html)

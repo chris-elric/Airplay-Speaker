@@ -10,14 +10,12 @@ import org.json.JSONObject
  */
 internal object LyricsPlus {
 
-    /** Public instances, tried in order; none requires a key. */
-    val BASE_URLS = listOf(
-        "https://lyricsplus.binimum.org",
-        "https://lyricsplus.atomix.one",
-        "https://lyricsplus-seven.vercel.app",
-        "https://lyricsplus.prjktla.workers.dev",
-        "https://lyrics-plus-backend.vercel.app",
-    )
+    /**
+     * Public instances, tried in order. Checked live on 2026-11-21: only the
+     * first answers (the others have an invalid certificate, a disabled
+     * deployment or no route). It allows 2 requests per 10 seconds.
+     */
+    val BASE_URLS = listOf("https://lyricsplus.binimum.org")
 
     /** Sources that make up the Apple-origin attempt. */
     const val SOURCE_APPLE = "apple"

@@ -676,7 +676,15 @@ class AppleMusicLyricsClient(
                 val artist = normalize(item.optString("artistName"))
                 val primaryArtist = normalize(primarySearchArtist(item.optString("artistName")))
                 val album = normalize(item.optString("collectionName"))
-                val titleScore = matchScore(title, wantedTitle)
+                // "Song (Apple Music Sessions)" / "Song - Live": the same song with a
+                // version tag the player did not send.
+                val baseTitle = normalize(
+                    item.optString("trackName").substringBefore("(").substringBefore(" - ").substringBefore("["),
+                )
+                val titleScore = maxOf(
+                    matchScore(title, wantedTitle),
+                    if (wantedTitle.isNotBlank() && baseTitle == wantedTitle) 140 else 0,
+                )
                 val artistScore = maxOf(
                     matchScore(artist, wantedArtist),
                     matchScore(primaryArtist, wantedPrimaryArtist),
