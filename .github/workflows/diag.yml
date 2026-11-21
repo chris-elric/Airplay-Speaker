@@ -1,0 +1,11 @@
+name: diag
+on:
+  push:
+    branches: [diag/lyrics]
+jobs:
+  d:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: probe
+        run: python3 .github/diag.py
