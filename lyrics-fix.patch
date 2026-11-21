@@ -1,0 +1,597 @@
+diff --git a/.github/workflows/build-debug-apk.yml b/.github/workflows/build-debug-apk.yml
+new file mode 100644
+index 0000000..77b7b7f
+--- /dev/null
++++ b/.github/workflows/build-debug-apk.yml
+@@ -0,0 +1,36 @@
++name: Build debug APK
++
++# Manual build that needs no signing secrets. Run it from the Actions tab
++# ("Run workflow"); the installable APK is attached to the run as an artifact.
++on:
++  workflow_dispatch:
++
++jobs:
++  build:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++        with:
++          submodules: recursive
++
++      - name: Use JDK
++        uses: actions/setup-java@v4
++        with:
++          distribution: "zulu"
++          java-version: "21"
++          cache: "gradle"
++
++      - name: Build debug APK
++        run: |
++          chmod +x ./gradlew
++          ./gradlew assembleDebug --stacktrace
++
++      - name: Lyrics unit tests
++        continue-on-error: true
++        run: ./gradlew :app:testDebugUnitTest --tests 'io.github.jqssun.airplay.lyrics.*'
++
++      - name: Upload APK
++        uses: actions/upload-artifact@v4
++        with:
++          name: airplay-speaker-debug-apk
++          path: app/build/outputs/apk/debug/*.apk
+diff --git a/app/src/main/kotlin/io/github/jqssun/airplay/lyrics/AppleMusicLyricsClient.kt b/app/src/main/kotlin/io/github/jqssun/airplay/lyrics/AppleMusicLyricsClient.kt
+index 103204d..1b675cd 100644
+--- a/app/src/main/kotlin/io/github/jqssun/airplay/lyrics/AppleMusicLyricsClient.kt
++++ b/app/src/main/kotlin/io/github/jqssun/airplay/lyrics/AppleMusicLyricsClient.kt
+@@ -23,7 +23,10 @@ import org.json.JSONObject
+  * Resolves normalized Apple-style syllable lyrics, including `oppositeTurn`
+  * duet placement and background vocals. No credentials are stored in the app.
+  */
+-class AppleMusicLyricsClient {
++class AppleMusicLyricsClient(
++    /** Receives short diagnostics so lookup failures show up in the in-app log. */
++    private val log: (String) -> Unit = {},
++) {
+ 
+     private val cache = object : LinkedHashMap<String, LyricsState>(16, 0.75f, true) {
+         override fun removeEldestEntry(
+@@ -37,7 +40,22 @@ class AppleMusicLyricsClient {
+         synchronized(cache) { cache[cacheKey] }?.let { return@withContext it }
+ 
+         val result = withTimeoutOrNull(LOOKUP_TIMEOUT_MS) {
+-            runCatching { findUncached(request) }.getOrNull()
++            val apple = withTimeoutOrNull(APPLE_LOOKUP_TIMEOUT_MS) {
++                runCatching { findUncached(request) }
++                    .onFailure { log("Lyrics: Apple lookup failed (${it.javaClass.simpleName}: ${it.message.orEmpty()})") }
++                    .getOrNull()
++            }
++            if (apple != null) {
++                apple
++            } else {
++                // The Apple mirror is a third-party service. When it is down,
++                // slow or changed, fall back to a public synced-lyrics catalogue
++                // instead of showing nothing while the song plays.
++                log("Lyrics: no Apple Music lyrics, trying LRCLIB fallback")
++                runCatching { findFromLrclib(request) }
++                    .onFailure { log("Lyrics: LRCLIB lookup failed (${it.javaClass.simpleName}: ${it.message.orEmpty()})") }
++                    .getOrNull()
++            }
+         }
+         result?.also { resolved ->
+             synchronized(cache) { cache[cacheKey] = resolved }
+@@ -101,11 +119,17 @@ class AppleMusicLyricsClient {
+     ): Pair<Long, LyricsState>? = resolveFirstCandidate(
+         candidateIds.distinct().take(MAX_LYRICS_CANDIDATES),
+     ) { candidateId ->
+-        requestText(
++        val body = requestText(
+             "$LYRICS_URL" + query("id" to candidateId.toString(), "v" to "2"),
+             maxBytes = MAX_LYRICS_BYTES,
+             readTimeoutMs = LYRICS_READ_TIMEOUT_MS,
+-        )?.let { parseResponse(it, candidateId) }
++            attempts = 2,
++        )
++        val parsed = body?.let { parseResponse(it, candidateId) }
++        if (body != null && parsed == null) {
++            log("Lyrics: unrecognised lyrics payload for id $candidateId (${describePayload(body)})")
++        }
++        parsed
+     }
+ 
+     private suspend fun findAlbumCandidateIds(request: LyricsRequest): List<Long> {
+@@ -186,13 +210,36 @@ class AppleMusicLyricsClient {
+         }.distinct().take(MAX_ALBUM_SEARCH_REQUESTS)
+     }
+ 
++    private class HttpOutcome(val body: String?, val retryable: Boolean = false)
++
++    /**
++     * Blocking GET. [attempts] > 1 retries only when the server answers with a
++     * transient status (429 or 5xx); a 404 or a timeout is never repeated.
++     */
+     private fun requestText(
+         url: String,
+         maxBytes: Int,
+         accept: String = "application/json",
+         connectTimeoutMs: Int = 3_500,
+         readTimeoutMs: Int = 6_500,
++        attempts: Int = 1,
+     ): String? {
++        for (attempt in 1..attempts) {
++            val outcome = requestOnce(url, maxBytes, accept, connectTimeoutMs, readTimeoutMs)
++            if (outcome.body != null) return outcome.body
++            if (!outcome.retryable || attempt == attempts) return null
++            Thread.sleep(RETRY_DELAY_MS)
++        }
++        return null
++    }
++
++    private fun requestOnce(
++        url: String,
++        maxBytes: Int,
++        accept: String,
++        connectTimeoutMs: Int,
++        readTimeoutMs: Int,
++    ): HttpOutcome {
+         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+             requestMethod = "GET"
+             connectTimeout = connectTimeoutMs
+@@ -202,17 +249,72 @@ class AppleMusicLyricsClient {
+             setRequestProperty("Accept-Language", "th-TH,th;q=0.9,en;q=0.8")
+             setRequestProperty("User-Agent", USER_AGENT)
+         }
++        val where = url.substringBefore('?')
+         return try {
+-            if (connection.responseCode !in 200..299) return null
+-            if (connection.contentLengthLong > maxBytes) return null
+-            connection.inputStream.use { it.readBoundedUtf8(maxBytes) }
+-        } catch (_: IOException) {
+-            null
++            val code = connection.responseCode
++            if (code !in 200..299) {
++                log("Lyrics: HTTP $code from $where")
++                HttpOutcome(null, retryable = code == 429 || code in 500..599)
++            } else if (connection.contentLengthLong > maxBytes) {
++                log("Lyrics: response from $where is larger than $maxBytes bytes")
++                HttpOutcome(null)
++            } else {
++                val body = connection.inputStream.use { it.readBoundedUtf8(maxBytes) }
++                if (body == null) log("Lyrics: response from $where exceeded $maxBytes bytes")
++                HttpOutcome(body)
++            }
++        } catch (error: IOException) {
++            log("Lyrics: ${error.javaClass.simpleName} from $where (${error.message.orEmpty()})")
++            HttpOutcome(null)
+         } finally {
+             connection.disconnect()
+         }
+     }
+ 
++    /** Lists only the top-level JSON keys, so diagnostics never contain lyric text. */
++    private fun describePayload(body: String): String {
++        val trimmed = body.trim()
++        if (trimmed.startsWith("[")) return "top-level array"
++        val keys = runCatching { JSONObject(trimmed).keys().asSequence().take(8).toList() }
++            .getOrNull()
++            ?: return "not JSON"
++        return "keys: " + keys.joinToString(",")
++    }
++
++    /**
++     * Fallback: LRCLIB is a free public catalogue of synced (LRC) lyrics that
++     * needs no account. Used only when the Apple Music mirror yields nothing.
++     */
++    private fun findFromLrclib(request: LyricsRequest): LyricsState? {
++        val title = cleanSearchTitle(request.title).ifBlank { request.title.trim() }
++        val artist = primarySearchArtist(request.artist).ifBlank { request.artist.trim() }
++        if (title.isBlank() || artist.isBlank()) return null
++        val seconds = ((request.durationMs + 500L) / 1_000L).takeIf { it > 0L }
++
++        requestText(
++            LRCLIB_GET_URL + query(
++                "track_name" to title,
++                "artist_name" to artist,
++                "album_name" to request.album.trim(),
++                "duration" to seconds?.toString().orEmpty(),
++            ),
++            maxBytes = MAX_LYRICS_BYTES,
++            readTimeoutMs = LRCLIB_READ_TIMEOUT_MS,
++        )
++            ?.let { runCatching { JSONObject(it) }.getOrNull() }
++            ?.let(::parseLrclibItem)
++            ?.let { return it }
++
++        return requestText(
++            LRCLIB_SEARCH_URL + query(
++                "track_name" to title,
++                "artist_name" to artist,
++            ),
++            maxBytes = MAX_SEARCH_BYTES,
++            readTimeoutMs = LRCLIB_READ_TIMEOUT_MS,
++        )?.let { parseLrclibSearch(it, request) }
++    }
++
+     private fun InputStream.readBoundedUtf8(maxBytes: Int): String? {
+         val output = ByteArrayOutputStream()
+         val buffer = ByteArray(8 * 1_024)
+@@ -240,15 +342,27 @@ class AppleMusicLyricsClient {
+         private const val ITUNES_LOOKUP_URL = "https://itunes.apple.com/lookup"
+         private const val LYRICS_URL = "https://lyrics.paxsenix.org/apple-music/lyrics"
+         private const val APPLE_MUSIC_SONG_URL = "https://music.apple.com/th/song"
++        private const val LRCLIB_GET_URL = "https://lrclib.net/api/get"
++        private const val LRCLIB_SEARCH_URL = "https://lrclib.net/api/search"
+         private val USER_AGENT =
+             "AirplaySpeaker/${BuildConfig.VERSION_NAME} " +
+                 "(https://github.com/l3kza08/Airplay-Speaker)"
+         private const val MAX_SEARCH_BYTES = 1024 * 1024
+-        private const val MAX_LYRICS_BYTES = 768 * 1024
++        // Syllable-synced responses for long songs can exceed the old 768 KB
++        // cap, which silently dropped otherwise valid lyrics.
++        private const val MAX_LYRICS_BYTES = 2 * 1024 * 1024
+         private const val MAX_APPLE_PAGE_BYTES = 768 * 1024
+         private const val CREDITS_TIMEOUT_MS = 3_800L
+-        private const val LOOKUP_TIMEOUT_MS = 18_000L
+-        private const val LYRICS_READ_TIMEOUT_MS = 5_500
++        // Whole lookup (Apple mirror first, then the fallback) and the share of
++        // it the Apple mirror may use. The service-level window must be larger.
++        private const val LOOKUP_TIMEOUT_MS = 40_000L
++        private const val APPLE_LOOKUP_TIMEOUT_MS = 28_000L
++        // The mirror builds syllable timelines on demand and is often slower
++        // than the previous 5.5 s read timeout allowed.
++        private const val LYRICS_READ_TIMEOUT_MS = 10_000
++        private const val LRCLIB_READ_TIMEOUT_MS = 6_000
++        private const val RETRY_DELAY_MS = 700L
++        private const val LRCLIB_MAX_DURATION_DIFFERENCE_S = 3.0
+         private const val MAX_CREDIT_SECTION_CHARS = 256 * 1024
+         private const val CACHE_ENTRIES = 12
+         private const val SEARCH_RESULT_LIMIT = 50
+@@ -472,12 +586,42 @@ class AppleMusicLyricsClient {
+ 
+         private const val MAX_DURATION_DIFFERENCE_MS = 90_000L
+ 
++        // The mirror's v2 payload has been seen with the row list under
++        // "lyrics" and under "content", and some deployments wrap it in an
++        // envelope. Reading only "lyrics" made every such response look empty.
++        private val lyricArrayKeys = listOf("lyrics", "content", "lines")
++        private val plainTextKeys = listOf("lyrics", "content", "plainLyrics", "plain")
++        private val envelopeKeys = listOf("data", "result", "response")
++        private val backgroundKeys = listOf("backgroundText", "background")
++
++        private fun lyricsArray(root: JSONObject): JSONArray? =
++            lyricArrayKeys.firstNotNullOfOrNull { root.optJSONArray(it) }
++
++        private fun plainText(root: JSONObject): String? = plainTextKeys.firstNotNullOfOrNull { key ->
++            (root.opt(key) as? String)?.trim()?.takeIf { it.isNotBlank() }
++        }
++
++        private fun unwrapPayload(value: String): JSONObject? {
++            val trimmed = value.trim()
++            if (trimmed.startsWith("[")) {
++                val array = runCatching { JSONArray(trimmed) }.getOrNull() ?: return null
++                return JSONObject().put("lyrics", array)
++            }
++            var current = runCatching { JSONObject(trimmed) }.getOrNull() ?: return null
++            for (depth in 0 until 2) {
++                if (lyricsArray(current) != null || plainText(current) != null) return current
++                current = envelopeKeys.firstNotNullOfOrNull { current.optJSONObject(it) }
++                    ?: return current
++            }
++            return current
++        }
++
+         internal fun parseResponse(value: String, trackId: Long): LyricsState? {
+-            val root = runCatching { JSONObject(value) }.getOrNull() ?: return null
+-            val rawLines = root.optJSONArray("lyrics")
++            val root = unwrapPayload(value) ?: return null
++            val rawLines = lyricsArray(root)
+             if (rawLines == null) {
+-                val plainLyrics = root.optString("lyrics").trim()
+-                return plainLyrics.takeIf { it.isNotBlank() }?.let {
++                val plainLyrics = plainText(root)
++                return plainLyrics?.let {
+                     LyricsState(
+                         status = LyricsStatus.PLAIN,
+                         plainLyrics = it,
+@@ -487,7 +631,7 @@ class AppleMusicLyricsClient {
+                 }
+             }
+             val declaredWordTiming = declaredWordTiming(
+-                root.optString("syncType", ""),
++                root.optString("syncType", "").ifBlank { root.optString("type", "") },
+             )
+             val allTexts = mutableListOf<String>()
+             val parsedLines = buildList {
+@@ -499,8 +643,12 @@ class AppleMusicLyricsClient {
+                         fallbackEndMs = declaredEnd.takeIf { it > 0L },
+                     )
+                     val mainText = main.text
++                    val backgroundKey = backgroundKeys.firstOrNull { key ->
++                        val candidate = rawLine.opt(key)
++                        candidate is JSONArray || candidate is String
++                    }
+                     val background = parseTextField(
+-                        value = rawLine.opt("backgroundText"),
++                        value = backgroundKey?.let(rawLine::opt),
+                         fallbackEndMs = declaredEnd.takeIf { it > 0L },
+                     )
+                     if (mainText.isBlank() && background.text.isBlank()) continue
+@@ -658,6 +806,105 @@ class AppleMusicLyricsClient {
+             }.distinct().joinToString(", ")
+         }
+ 
++        private val lrcLeadingTimestamp = Regex("^\\[(\\d{1,3}):(\\d{2})(?:[.:](\\d{1,3}))?]")
++        private val lrcWordTag = Regex("<\\d{1,3}:\\d{2}(?:[.:]\\d{1,3})?>")
++
++        /**
++         * Parses LRC text ("[mm:ss.xx] lyric"). Metadata tags such as [ar:...]
++         * are ignored and each row ends where the next timestamp begins.
++         */
++        internal fun parseLrc(lrc: String): List<LyricLine> {
++            val rows = mutableListOf<Pair<Long, String>>()
++            for (rawLine in lrc.lineSequence()) {
++                var rest = rawLine.trim()
++                val times = mutableListOf<Long>()
++                while (true) {
++                    val match = lrcLeadingTimestamp.find(rest) ?: break
++                    val minutes = match.groupValues[1].toLong()
++                    val seconds = match.groupValues[2].toLong()
++                    val fraction = match.groupValues[3].padEnd(3, '0').take(3).toLong()
++                    times += minutes * 60_000L + seconds * 1_000L + fraction
++                    rest = rest.substring(match.range.last + 1).trimStart()
++                }
++                if (times.isEmpty()) continue
++                val text = rest.replace(lrcWordTag, "").trim()
++                times.forEach { rows += it to text }
++            }
++            rows.sortBy { it.first }
++            return buildList {
++                for (index in rows.indices) {
++                    val (timeMs, text) = rows[index]
++                    if (text.isBlank()) continue
++                    val nextTime = rows.getOrNull(index + 1)?.first
++                    add(
++                        LyricLine(
++                            timeMs = timeMs,
++                            text = text,
++                            endMs = nextTime?.takeIf { it > timeMs },
++                        )
++                    )
++                }
++            }
++        }
++
++        internal fun parseLrclibItem(item: JSONObject): LyricsState? {
++            val id = item.optLong("id", -1L).takeIf { it > 0L }
++            if (item.optBoolean("instrumental", false)) {
++                return LyricsState(status = LyricsStatus.INSTRUMENTAL, sourceId = id)
++            }
++            val lines = parseLrc((item.opt("syncedLyrics") as? String).orEmpty())
++            if (lines.isNotEmpty()) {
++                return LyricsState(
++                    status = LyricsStatus.SYNCED,
++                    lines = lines,
++                    plainLyrics = lines.joinToString("\n") { it.text },
++                    sourceId = id,
++                    wordSyncMode = WordSyncMode.LINE,
++                )
++            }
++            val plain = (item.opt("plainLyrics") as? String)?.trim().orEmpty()
++            return plain.takeIf { it.isNotBlank() }?.let {
++                LyricsState(
++                    status = LyricsStatus.PLAIN,
++                    plainLyrics = it,
++                    sourceId = id,
++                    wordSyncMode = WordSyncMode.NONE,
++                )
++            }
++        }
++
++        /** Picks the closest-duration synced match from an LRCLIB search result list. */
++        internal fun parseLrclibSearch(value: String, request: LyricsRequest): LyricsState? {
++            val array = runCatching { JSONArray(value) }.getOrNull() ?: return null
++            val wantedTitle = normalize(request.title)
++            val wantedArtist = normalize(primarySearchArtist(request.artist))
++            val wantedSeconds = request.durationMs / 1_000.0
++            val candidates = (0 until array.length())
++                .mapNotNull { array.optJSONObject(it) }
++                .filter { item ->
++                    matchScore(normalize(item.optString("trackName")), wantedTitle) > 0 &&
++                        matchScore(
++                            normalize(primarySearchArtist(item.optString("artistName"))),
++                            wantedArtist,
++                        ) > 0
++                }
++                .map { item ->
++                    val difference = if (request.durationMs > 0L && item.has("duration")) {
++                        kotlin.math.abs(item.optDouble("duration", 0.0) - wantedSeconds)
++                    } else {
++                        0.0
++                    }
++                    item to difference
++                }
++                .filter { (_, difference) -> difference <= LRCLIB_MAX_DURATION_DIFFERENCE_S }
++                .sortedWith(
++                    compareByDescending<Pair<JSONObject, Double>> { (item, _) ->
++                        !(item.opt("syncedLyrics") as? String).isNullOrBlank()
++                    }.thenBy { it.second }
++                )
++            return candidates.firstNotNullOfOrNull { (item, _) -> parseLrclibItem(item) }
++        }
++
+         private fun extractJsonArray(value: String, startIndex: Int): String? {
+             if (startIndex !in value.indices || value[startIndex] != '[') return null
+             val scanEnd = minOf(value.length, startIndex + MAX_CREDIT_SECTION_CHARS)
+diff --git a/app/src/main/kotlin/io/github/jqssun/airplay/service/AirPlayService.kt b/app/src/main/kotlin/io/github/jqssun/airplay/service/AirPlayService.kt
+index 6b068f8..d4418d4 100644
+--- a/app/src/main/kotlin/io/github/jqssun/airplay/service/AirPlayService.kt
++++ b/app/src/main/kotlin/io/github/jqssun/airplay/service/AirPlayService.kt
+@@ -167,7 +167,7 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
+     val trackInfo = _trackInfo.asStateFlow()
+ 
+     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+-    private val appleMusicLyricsClient = AppleMusicLyricsClient()
++    private val appleMusicLyricsClient = AppleMusicLyricsClient(log = { message -> log(message) })
+     private val _lyrics = MutableStateFlow(LyricsState())
+     val lyrics = _lyrics.asStateFlow()
+     private var lyricsJob: Job? = null
+@@ -1090,7 +1090,7 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
+                 .withRepairedWordTimings(trackDurationMs = duration)
+                 .withStableDuetAlignment()
+             log(
+-                "Lyrics: Apple Music ${finalResult.status} " +
++                "Lyrics: result ${finalResult.status} " +
+                     "(mode=${finalResult.wordSyncMode}, " +
+                     "${finalResult.lines.size} timed lines, " +
+                     "score=${finalResult.wordTimingQualityScore(duration)})"
+@@ -1355,7 +1355,8 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
+         const val VIDEO_POLL_PENDING_TIMEOUT_MS = 3_000L
+         private const val AUDIO_PAUSE_WATCHDOG_INTERVAL_MS = 250L
+         private const val AUDIO_PAUSE_SILENCE_MS = 1_800L
+-        private const val LYRICS_SEARCH_WINDOW_MS = 20_000L
++        // Must stay above AppleMusicLyricsClient's own lookup timeout (40 s).
++        private const val LYRICS_SEARCH_WINDOW_MS = 45_000L
+         private const val MAX_RETAINED_COVER_BYTES = 2 * 1024 * 1024
+     }
+ }
+diff --git a/app/src/test/kotlin/io/github/jqssun/airplay/lyrics/AppleMusicLyricsClientTest.kt b/app/src/test/kotlin/io/github/jqssun/airplay/lyrics/AppleMusicLyricsClientTest.kt
+index 60bbfa5..df0203b 100644
+--- a/app/src/test/kotlin/io/github/jqssun/airplay/lyrics/AppleMusicLyricsClientTest.kt
++++ b/app/src/test/kotlin/io/github/jqssun/airplay/lyrics/AppleMusicLyricsClientTest.kt
+@@ -568,4 +568,136 @@ class AppleMusicLyricsClientTest {
+ 
+         assertEquals("", credit)
+     }
++
++    @Test
++    fun readsTheRowListFromAContentKeyAndTypeLabel() {
++        val response = """
++            {
++              "type": "Syllable",
++              "content": [
++                {
++                  "timestamp": 1000,
++                  "endtime": 2400,
++                  "oppositeTurn": false,
++                  "text": [
++                    {"text":"Hello", "timestamp":1000, "endtime":1500},
++                    {"text":"world", "timestamp":1500, "endtime":2400}
++                  ],
++                  "background": [
++                    {"text":"echo", "timestamp":2000, "endtime":2400}
++                  ]
++                }
++              ]
++            }
++        """.trimIndent()
++
++        val state = AppleMusicLyricsClient.parseResponse(response, 7L)
++
++        assertEquals(LyricsStatus.SYNCED, state?.status)
++        assertEquals(WordSyncMode.ENHANCED, state?.wordSyncMode)
++        assertEquals("Hello world", state?.lines?.single()?.text)
++        assertEquals("echo", state?.lines?.single()?.backgroundText)
++        assertEquals(2, state?.lines?.single()?.words?.size)
++    }
++
++    @Test
++    fun unwrapsAnEnvelopeAndATopLevelArray() {
++        val enveloped = """
++            {"status":"ok","data":{"lyrics":[
++              {"timestamp":1000,"endtime":2000,"text":"Wrapped line"}
++            ]}}
++        """.trimIndent()
++        val bare = """[{"timestamp":1000,"endtime":2000,"text":"Bare line"}]"""
++
++        assertEquals(
++            "Wrapped line",
++            AppleMusicLyricsClient.parseResponse(enveloped, 1L)?.lines?.single()?.text,
++        )
++        assertEquals(
++            "Bare line",
++            AppleMusicLyricsClient.parseResponse(bare, 1L)?.lines?.single()?.text,
++        )
++    }
++
++    @Test
++    fun anErrorPayloadIsNotMistakenForLyrics() {
++        assertEquals(
++            null,
++            AppleMusicLyricsClient.parseResponse("""{"error":"rate limited"}""", 1L),
++        )
++    }
++
++    @Test
++    fun parsesLrcRowsAndIgnoresMetadata() {
++        val lrc = """
++            [ar:Some Artist]
++            [ti:Some Title]
++            [00:01.50] First line
++            [00:04.00]<00:04.00>Second <00:04.50>line
++            [00:07.25]
++            [00:09.5][01:00.000] Repeated chorus
++        """.trimIndent()
++
++        val lines = AppleMusicLyricsClient.parseLrc(lrc)
++
++        assertEquals(
++            listOf("First line", "Second line", "Repeated chorus", "Repeated chorus"),
++            lines.map { it.text },
++        )
++        assertEquals(listOf(1_500L, 4_000L, 9_500L, 60_000L), lines.map { it.timeMs })
++        // A blank row closes the previous line instead of leaving it open.
++        assertEquals(7_250L, lines[1].endMs)
++        assertEquals(4_000L, lines[0].endMs)
++        assertTrue(lines.all { it.words.isEmpty() && !it.exactWordTiming })
++    }
++
++    @Test
++    fun lrclibItemsBecomeLineSyncedPlainOrInstrumental() {
++        val synced = org.json.JSONObject(
++            """{"id":5,"syncedLyrics":"[00:01.00] One\n[00:02.00] Two","plainLyrics":"One\nTwo"}"""
++        )
++        val plainOnly = org.json.JSONObject(
++            """{"id":6,"syncedLyrics":null,"plainLyrics":"Just text"}"""
++        )
++        val instrumental = org.json.JSONObject("""{"id":7,"instrumental":true}""")
++
++        val syncedState = AppleMusicLyricsClient.parseLrclibItem(synced)
++        assertEquals(LyricsStatus.SYNCED, syncedState?.status)
++        assertEquals(WordSyncMode.LINE, syncedState?.wordSyncMode)
++        assertEquals(listOf("One", "Two"), syncedState?.lines?.map { it.text })
++        assertEquals(5L, syncedState?.sourceId)
++
++        val plainState = AppleMusicLyricsClient.parseLrclibItem(plainOnly)
++        assertEquals(LyricsStatus.PLAIN, plainState?.status)
++        assertEquals("Just text", plainState?.plainLyrics)
++
++        assertEquals(
++            LyricsStatus.INSTRUMENTAL,
++            AppleMusicLyricsClient.parseLrclibItem(instrumental)?.status,
++        )
++    }
++
++    @Test
++    fun lrclibSearchPrefersTheSyncedResultWithTheClosestDuration() {
++        val response = """
++            [
++              {"id":1,"trackName":"Stay","artistName":"Example Artist","duration":260,
++               "syncedLyrics":"[00:01.00] Wrong length"},
++              {"id":2,"trackName":"Stay","artistName":"Example Artist","duration":201,
++               "syncedLyrics":null,"plainLyrics":"Plain only"},
++              {"id":3,"trackName":"Stay","artistName":"Example Artist","duration":203,
++               "syncedLyrics":"[00:01.00] Right song"},
++              {"id":4,"trackName":"Other Song","artistName":"Example Artist","duration":202,
++               "syncedLyrics":"[00:01.00] Wrong title"}
++            ]
++        """.trimIndent()
++
++        val state = AppleMusicLyricsClient.parseLrclibSearch(
++            response,
++            LyricsRequest("Stay", "Example Artist", "The Album", 202_000L),
++        )
++
++        assertEquals(3L, state?.sourceId)
++        assertEquals("Right song", state?.lines?.single()?.text)
++    }
+ }
