@@ -41,13 +41,16 @@ import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -74,6 +77,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -777,6 +781,30 @@ private fun TvSettingsPanel(
     val advertiseVideo by viewModel.advertiseVideo.collectAsState()
     val motionArtworkEnabled by viewModel.motionArtworkEnabled.collectAsState()
     val fullscreenMotionArtwork by viewModel.fullscreenMotionArtwork.collectAsState()
+    val lyricsTranslation by viewModel.lyricsTranslation.collectAsState()
+    val translationLanguage by viewModel.lyricsTranslationLanguage.collectAsState()
+    val appleToken by viewModel.appleMediaUserToken.collectAsState()
+    val musixmatchToken by viewModel.musixmatchToken.collectAsState()
+    var tokenDialog by remember { mutableStateOf<String?>(null) }
+    val languages = listOf("es", "en", "pt", "fr", "de", "it", "ja", "ko")
+
+    tokenDialog?.let { which ->
+        val isApple = which == "apple"
+        TvTokenDialog(
+            title = stringResource(
+                if (isApple) R.string.setting_apple_token else R.string.setting_musixmatch_token
+            ),
+            hint = stringResource(
+                if (isApple) R.string.setting_apple_token_desc else R.string.setting_musixmatch_token_desc
+            ),
+            initial = if (isApple) appleToken else musixmatchToken,
+            onSave = {
+                if (isApple) viewModel.setAppleMediaUserToken(it) else viewModel.setMusixmatchToken(it)
+                tokenDialog = null
+            },
+            onDismiss = { tokenDialog = null },
+        )
+    }
 
     Column(
         modifier = modifier
@@ -836,6 +864,49 @@ private fun TvSettingsPanel(
                     checked = fullscreenMotionArtwork,
                     onCheckedChange = viewModel::setFullscreenMotionArtwork,
                     enabled = motionArtworkEnabled,
+                )
+            }
+            item {
+                TvSettingCard(
+                    stringResource(R.string.setting_lyrics_translation),
+                    stringResource(R.string.setting_lyrics_translation_desc),
+                    lyricsTranslation,
+                    viewModel::setLyricsTranslation,
+                )
+            }
+            item {
+                TvValueCard(
+                    title = stringResource(R.string.setting_lyrics_translation_language),
+                    description = stringResource(R.string.setting_lyrics_translation_language_desc),
+                    value = translationLanguage.uppercase(),
+                    onClick = {
+                        val next = languages.indexOf(translationLanguage).let { i ->
+                            languages[(i + 1) % languages.size]
+                        }
+                        viewModel.setLyricsTranslationLanguage(next)
+                    },
+                )
+            }
+            item {
+                TvValueCard(
+                    title = stringResource(R.string.setting_apple_token),
+                    description = stringResource(R.string.setting_apple_token_desc),
+                    value = stringResource(
+                        if (appleToken.isBlank()) R.string.lyrics_token_not_set else R.string.lyrics_token_set
+                    ),
+                    highlighted = appleToken.isNotBlank(),
+                    onClick = { tokenDialog = "apple" },
+                )
+            }
+            item {
+                TvValueCard(
+                    title = stringResource(R.string.setting_musixmatch_token),
+                    description = stringResource(R.string.setting_musixmatch_token_desc),
+                    value = stringResource(
+                        if (musixmatchToken.isBlank()) R.string.lyrics_token_not_set else R.string.lyrics_token_set
+                    ),
+                    highlighted = musixmatchToken.isNotBlank(),
+                    onClick = { tokenDialog = "musixmatch" },
                 )
             }
             item {
@@ -943,6 +1014,95 @@ private fun TvSettingsPanel(
             }
         }
     }
+}
+
+@Composable
+private fun TvValueCard(
+    title: String,
+    description: String,
+    value: String,
+    onClick: () -> Unit,
+    highlighted: Boolean = false,
+) {
+    var focused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (focused) 1.025f else 1f, label = "tvValueScale")
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(102.dp)
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .liquidGlass(
+                shape = RoundedCornerShape(20.dp),
+                focused = focused,
+                selected = highlighted,
+                tint = if (highlighted) Color(0xFF9EF2D0) else Color(0xFF85CCFF),
+                strength = 0.84f,
+            )
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(role = Role.Button, onClick = onClick)
+            .focusable()
+            .padding(horizontal = 24.dp, vertical = 18.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                color = Color(0xFFF6F4FF),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(5.dp))
+            Text(
+                description,
+                color = Color(0xFF9697A8),
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.width(18.dp))
+        Text(
+            value,
+            color = if (highlighted) Color(0xFF9EF2D0) else Color(0xFFF6F4FF),
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun TvTokenDialog(
+    title: String,
+    hint: String,
+    initial: String,
+    onSave: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var text by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column {
+                Text(hint, style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(text) }) { Text(stringResource(R.string.btn_save_token)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.btn_cancel_token)) }
+        },
+    )
 }
 
 @Composable
