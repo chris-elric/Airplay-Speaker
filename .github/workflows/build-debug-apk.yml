@@ -1,0 +1,36 @@
+name: Build debug APK
+
+# Manual build that needs no signing secrets. Run it from the Actions tab
+# ("Run workflow"); the installable APK is attached to the run as an artifact.
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Use JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: "zulu"
+          java-version: "21"
+          cache: "gradle"
+
+      - name: Build debug APK
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --stacktrace
+
+      - name: Lyrics unit tests
+        continue-on-error: true
+        run: ./gradlew :app:testDebugUnitTest --tests 'io.github.jqssun.airplay.lyrics.*'
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: airplay-speaker-debug-apk
+          path: app/build/outputs/apk/debug/*.apk

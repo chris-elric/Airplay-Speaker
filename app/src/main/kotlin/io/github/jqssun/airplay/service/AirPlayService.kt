@@ -167,7 +167,7 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
     val trackInfo = _trackInfo.asStateFlow()
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val appleMusicLyricsClient = AppleMusicLyricsClient()
+    private val appleMusicLyricsClient = AppleMusicLyricsClient(log = { message -> log(message) })
     private val _lyrics = MutableStateFlow(LyricsState())
     val lyrics = _lyrics.asStateFlow()
     private var lyricsJob: Job? = null
@@ -1090,7 +1090,7 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
                 .withRepairedWordTimings(trackDurationMs = duration)
                 .withStableDuetAlignment()
             log(
-                "Lyrics: Apple Music ${finalResult.status} " +
+                "Lyrics: result ${finalResult.status} " +
                     "(mode=${finalResult.wordSyncMode}, " +
                     "${finalResult.lines.size} timed lines, " +
                     "score=${finalResult.wordTimingQualityScore(duration)})"
@@ -1355,7 +1355,8 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
         const val VIDEO_POLL_PENDING_TIMEOUT_MS = 3_000L
         private const val AUDIO_PAUSE_WATCHDOG_INTERVAL_MS = 250L
         private const val AUDIO_PAUSE_SILENCE_MS = 1_800L
-        private const val LYRICS_SEARCH_WINDOW_MS = 20_000L
+        // Must stay above AppleMusicLyricsClient's own lookup timeout (46 s).
+        private const val LYRICS_SEARCH_WINDOW_MS = 55_000L
         private const val MAX_RETAINED_COVER_BYTES = 2 * 1024 * 1024
     }
 }

@@ -568,4 +568,244 @@ class AppleMusicLyricsClientTest {
 
         assertEquals("", credit)
     }
+
+    @Test
+    fun readsTheRowListFromAContentKeyAndTypeLabel() {
+        val response = """
+            {
+              "type": "Syllable",
+              "content": [
+                {
+                  "timestamp": 1000,
+                  "endtime": 2400,
+                  "oppositeTurn": false,
+                  "text": [
+                    {"text":"Hello", "timestamp":1000, "endtime":1500},
+                    {"text":"world", "timestamp":1500, "endtime":2400}
+                  ],
+                  "background": [
+                    {"text":"echo", "timestamp":2000, "endtime":2400}
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val state = AppleMusicLyricsClient.parseResponse(response, 7L)
+
+        assertEquals(LyricsStatus.SYNCED, state?.status)
+        assertEquals(WordSyncMode.ENHANCED, state?.wordSyncMode)
+        assertEquals("Hello world", state?.lines?.single()?.text)
+        assertEquals("echo", state?.lines?.single()?.backgroundText)
+        assertEquals(2, state?.lines?.single()?.words?.size)
+    }
+
+    @Test
+    fun unwrapsAnEnvelopeAndATopLevelArray() {
+        val enveloped = """
+            {"status":"ok","data":{"lyrics":[
+              {"timestamp":1000,"endtime":2000,"text":"Wrapped line"}
+            ]}}
+        """.trimIndent()
+        val bare = """[{"timestamp":1000,"endtime":2000,"text":"Bare line"}]"""
+
+        assertEquals(
+            "Wrapped line",
+            AppleMusicLyricsClient.parseResponse(enveloped, 1L)?.lines?.single()?.text,
+        )
+        assertEquals(
+            "Bare line",
+            AppleMusicLyricsClient.parseResponse(bare, 1L)?.lines?.single()?.text,
+        )
+    }
+
+    @Test
+    fun anErrorPayloadIsNotMistakenForLyrics() {
+        assertEquals(
+            null,
+            AppleMusicLyricsClient.parseResponse("""{"error":"rate limited"}""", 1L),
+        )
+    }
+
+    @Test
+    fun parsesLrcRowsAndIgnoresMetadata() {
+        val lrc = """
+            [ar:Some Artist]
+            [ti:Some Title]
+            [00:01.50] First line
+            [00:04.00]<00:04.00>Second <00:04.50>line
+            [00:07.25]
+            [00:09.5][01:00.000] Repeated chorus
+        """.trimIndent()
+
+        val lines = AppleMusicLyricsClient.parseLrc(lrc)
+
+        assertEquals(
+            listOf("First line", "Second line", "Repeated chorus", "Repeated chorus"),
+            lines.map { it.text },
+        )
+        assertEquals(listOf(1_500L, 4_000L, 9_500L, 60_000L), lines.map { it.timeMs })
+        // A blank row closes the previous line instead of leaving it open.
+        assertEquals(7_250L, lines[1].endMs)
+        assertEquals(4_000L, lines[0].endMs)
+        assertTrue(lines.all { it.words.isEmpty() && !it.exactWordTiming })
+    }
+
+    @Test
+    fun lrclibItemsBecomeLineSyncedPlainOrInstrumental() {
+        val synced = org.json.JSONObject(
+            """{"id":5,"syncedLyrics":"[00:01.00] One\n[00:02.00] Two","plainLyrics":"One\nTwo"}"""
+        )
+        val plainOnly = org.json.JSONObject(
+            """{"id":6,"syncedLyrics":null,"plainLyrics":"Just text"}"""
+        )
+        val instrumental = org.json.JSONObject("""{"id":7,"instrumental":true}""")
+
+        val syncedState = AppleMusicLyricsClient.parseLrclibItem(synced)
+        assertEquals(LyricsStatus.SYNCED, syncedState?.status)
+        assertEquals(WordSyncMode.LINE, syncedState?.wordSyncMode)
+        assertEquals(listOf("One", "Two"), syncedState?.lines?.map { it.text })
+        assertEquals(5L, syncedState?.sourceId)
+
+        val plainState = AppleMusicLyricsClient.parseLrclibItem(plainOnly)
+        assertEquals(LyricsStatus.PLAIN, plainState?.status)
+        assertEquals("Just text", plainState?.plainLyrics)
+
+        assertEquals(
+            LyricsStatus.INSTRUMENTAL,
+            AppleMusicLyricsClient.parseLrclibItem(instrumental)?.status,
+        )
+    }
+
+    @Test
+    fun lrclibSearchPrefersTheSyncedResultWithTheClosestDuration() {
+        val response = """
+            [
+              {"id":1,"trackName":"Stay","artistName":"Example Artist","duration":260,
+               "syncedLyrics":"[00:01.00] Wrong length"},
+              {"id":2,"trackName":"Stay","artistName":"Example Artist","duration":201,
+               "syncedLyrics":null,"plainLyrics":"Plain only"},
+              {"id":3,"trackName":"Stay","artistName":"Example Artist","duration":203,
+               "syncedLyrics":"[00:01.00] Right song"},
+              {"id":4,"trackName":"Other Song","artistName":"Example Artist","duration":202,
+               "syncedLyrics":"[00:01.00] Wrong title"}
+            ]
+        """.trimIndent()
+
+        val state = AppleMusicLyricsClient.parseLrclibSearch(
+            response,
+            LyricsRequest("Stay", "Example Artist", "The Album", 202_000L),
+        )
+
+        assertEquals(3L, state?.sourceId)
+        assertEquals("Right song", state?.lines?.single()?.text)
+    }
+
+    @Test
+    fun neteaseSearchPicksTheRecordingWithTheMatchingDuration() {
+        val response = """
+            {"code":200,"result":{"songs":[
+              {"id":101,"name":"Stay (Live)","artists":[{"name":"Example Artist"}],
+               "album":{"name":"Live at Home"},"duration":286000},
+              {"id":102,"name":"Stay","artists":[{"name":"Example Artist"},{"name":"Guest"}],
+               "album":{"name":"The Album"},"duration":201500},
+              {"id":103,"name":"Stay","artists":[{"name":"Someone Else"}],
+               "album":{"name":"Other"},"duration":202000}
+            ]}}
+        """.trimIndent()
+
+        val ids = AppleMusicLyricsClient.rankNeteaseSongIds(
+            response,
+            LyricsRequest("Stay", "Example Artist", "The Album", 202_000L),
+        )
+
+        assertEquals(listOf(102L), ids)
+    }
+
+    @Test
+    fun neteaseLyricsDropLeadingCreditRowsAndKeepSungLines() {
+        val response = """
+            {"code":200,"lrc":{"lyric":"[00:00.000] 作词 : Someone\n[00:01.000] 作曲 : Someone\n[00:12.340]First sung line\n[00:15.000]Second sung line"}}
+        """.trimIndent()
+
+        val state = AppleMusicLyricsClient.parseNeteaseLyric(response, 102L)
+
+        assertEquals(LyricsStatus.SYNCED, state?.status)
+        assertEquals(WordSyncMode.LINE, state?.wordSyncMode)
+        assertEquals(listOf("First sung line", "Second sung line"), state?.lines?.map { it.text })
+        assertEquals(12_340L, state?.lines?.first()?.timeMs)
+        assertEquals(102L, state?.sourceId)
+    }
+
+    @Test
+    fun neteaseInstrumentalAndUncollectedFlagsAreHonoured() {
+        assertEquals(
+            LyricsStatus.INSTRUMENTAL,
+            AppleMusicLyricsClient.parseNeteaseLyric("""{"nolyric":true}""", 1L)?.status,
+        )
+        assertEquals(
+            null,
+            AppleMusicLyricsClient.parseNeteaseLyric("""{"uncollected":true}""", 1L),
+        )
+    }
+
+    @Test
+    fun qqSearchReadsMidsAndRejectsWrongDurations() {
+        val response = """
+            {"code":0,"data":{"song":{"list":[
+              {"songmid":"000AAA","songid":11,"songname":"Stay","albumname":"The Album",
+               "singer":[{"name":"Example Artist"}],"interval":202},
+              {"songmid":"000BBB","songid":12,"songname":"Stay","albumname":"Live",
+               "singer":[{"name":"Example Artist"}],"interval":290}
+            ]}}}
+        """.trimIndent()
+
+        val songs = AppleMusicLyricsClient.rankQqSongs(
+            response,
+            LyricsRequest("Stay", "Example Artist", "The Album", 202_000L),
+        )
+
+        assertEquals(listOf("000AAA"), songs.map { it.mid })
+        assertEquals(11L, songs.single().id)
+    }
+
+    @Test
+    fun qqLyricsDecodeHtmlEntitiesAndJsonpWrappers() {
+        val body = "MusicJsonCallback({\"retcode\":0,\"code\":0,\"lyric\":" +
+            "\"[ti:Stay]&#10;[00&#58;01&#46;50]Don&apos;t go&#10;[00&#58;04&#46;00]Stay here\"})"
+
+        val state = AppleMusicLyricsClient.parseQqLyric(body, 11L)
+
+        assertEquals(LyricsStatus.SYNCED, state?.status)
+        assertEquals(listOf("Don't go", "Stay here"), state?.lines?.map { it.text })
+        assertEquals(listOf(1_500L, 4_000L), state?.lines?.map { it.timeMs })
+        assertEquals(null, AppleMusicLyricsClient.parseQqLyric("""{"retcode":-1901}""", 1L))
+    }
+
+    @Test
+    fun htmlUnescapeHandlesNumericHexAndNamedEntities() {
+        assertEquals(
+            "a:b. & <c> \"d\" 'e'",
+            AppleMusicLyricsClient.htmlUnescape("a&#58;b&#x2E; &amp; &lt;c&gt; &quot;d&quot; &apos;e&apos;"),
+        )
+        assertEquals("plain", AppleMusicLyricsClient.htmlUnescape("plain"))
+        assertEquals("&#99999999;", AppleMusicLyricsClient.htmlUnescape("&#99999999;"))
+    }
+
+    @Test
+    fun fallbackChoiceRanksSyncedFirstThenSourceOrder() {
+        val plain = LyricsState(status = LyricsStatus.PLAIN, plainLyrics = "text", sourceId = 1L)
+        val syncedQq = LyricsState(
+            status = LyricsStatus.SYNCED,
+            lines = listOf(LyricLine(1_000L, "qq")),
+            sourceId = 2L,
+        )
+        val syncedLrclib = syncedQq.copy(sourceId = 3L)
+        val instrumental = LyricsState(status = LyricsStatus.INSTRUMENTAL, sourceId = 4L)
+
+        assertEquals(2L, AppleMusicLyricsClient.chooseFallback(listOf(plain, syncedQq, syncedLrclib))?.sourceId)
+        assertEquals(1L, AppleMusicLyricsClient.chooseFallback(listOf(instrumental, plain))?.sourceId)
+        assertEquals(null, AppleMusicLyricsClient.chooseFallback(listOf(null, null)))
+    }
 }
+

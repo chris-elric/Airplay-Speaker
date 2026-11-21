@@ -23,7 +23,10 @@ import org.json.JSONObject
  * Resolves normalized Apple-style syllable lyrics, including `oppositeTurn`
  * duet placement and background vocals. No credentials are stored in the app.
  */
-class AppleMusicLyricsClient {
+class AppleMusicLyricsClient(
+    /** Receives short diagnostics so lookup failures show up in the in-app log. */
+    private val log: (String) -> Unit = {},
+) {
 
     private val cache = object : LinkedHashMap<String, LyricsState>(16, 0.75f, true) {
         override fun removeEldestEntry(
@@ -37,7 +40,12 @@ class AppleMusicLyricsClient {
         synchronized(cache) { cache[cacheKey] }?.let { return@withContext it }
 
         val result = withTimeoutOrNull(LOOKUP_TIMEOUT_MS) {
-            runCatching { findUncached(request) }.getOrNull()
+            val apple = withTimeoutOrNull(APPLE_LOOKUP_TIMEOUT_MS) {
+                runCatching { findUncached(request) }
+                    .onFailure { log("Lyrics: Apple lookup failed (${it.javaClass.simpleName}: ${it.message.orEmpty()})") }
+                    .getOrNull()
+            }
+            apple ?: findFromFallbackSources(request)
         }
         result?.also { resolved ->
             synchronized(cache) { cache[cacheKey] = resolved }
@@ -101,11 +109,17 @@ class AppleMusicLyricsClient {
     ): Pair<Long, LyricsState>? = resolveFirstCandidate(
         candidateIds.distinct().take(MAX_LYRICS_CANDIDATES),
     ) { candidateId ->
-        requestText(
+        val body = requestText(
             "$LYRICS_URL" + query("id" to candidateId.toString(), "v" to "2"),
             maxBytes = MAX_LYRICS_BYTES,
             readTimeoutMs = LYRICS_READ_TIMEOUT_MS,
-        )?.let { parseResponse(it, candidateId) }
+            attempts = 2,
+        )
+        val parsed = body?.let { parseResponse(it, candidateId) }
+        if (body != null && parsed == null) {
+            log("Lyrics: unrecognised lyrics payload for id $candidateId (${describePayload(body)})")
+        }
+        parsed
     }
 
     private suspend fun findAlbumCandidateIds(request: LyricsRequest): List<Long> {
@@ -186,32 +200,231 @@ class AppleMusicLyricsClient {
         }.distinct().take(MAX_ALBUM_SEARCH_REQUESTS)
     }
 
+    private class HttpOutcome(val body: String?, val retryable: Boolean = false)
+
+    /**
+     * Blocking GET. [attempts] > 1 retries only when the server answers with a
+     * transient status (429 or 5xx); a 404 or a timeout is never repeated.
+     */
     private fun requestText(
         url: String,
         maxBytes: Int,
         accept: String = "application/json",
         connectTimeoutMs: Int = 3_500,
         readTimeoutMs: Int = 6_500,
+        attempts: Int = 1,
+        headers: Map<String, String> = emptyMap(),
+        postBody: String? = null,
     ): String? {
+        for (attempt in 1..attempts) {
+            val outcome = requestOnce(
+                url, maxBytes, accept, connectTimeoutMs, readTimeoutMs, headers, postBody,
+            )
+            if (outcome.body != null) return outcome.body
+            if (!outcome.retryable || attempt == attempts) return null
+            Thread.sleep(RETRY_DELAY_MS)
+        }
+        return null
+    }
+
+    private fun requestOnce(
+        url: String,
+        maxBytes: Int,
+        accept: String,
+        connectTimeoutMs: Int,
+        readTimeoutMs: Int,
+        headers: Map<String, String>,
+        postBody: String?,
+    ): HttpOutcome {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
+            requestMethod = if (postBody != null) "POST" else "GET"
             connectTimeout = connectTimeoutMs
             readTimeout = readTimeoutMs
             instanceFollowRedirects = true
             setRequestProperty("Accept", accept)
             setRequestProperty("Accept-Language", "th-TH,th;q=0.9,en;q=0.8")
             setRequestProperty("User-Agent", USER_AGENT)
+            headers.forEach { (name, value) -> setRequestProperty(name, value) }
+            if (postBody != null) {
+                doOutput = true
+                setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+            }
         }
+        val where = url.substringBefore('?')
         return try {
-            if (connection.responseCode !in 200..299) return null
-            if (connection.contentLengthLong > maxBytes) return null
-            connection.inputStream.use { it.readBoundedUtf8(maxBytes) }
-        } catch (_: IOException) {
-            null
+            if (postBody != null) {
+                connection.outputStream.use { it.write(postBody.toByteArray(Charsets.UTF_8)) }
+            }
+            val code = connection.responseCode
+            if (code !in 200..299) {
+                log("Lyrics: HTTP $code from $where")
+                HttpOutcome(null, retryable = code == 429 || code in 500..599)
+            } else if (connection.contentLengthLong > maxBytes) {
+                log("Lyrics: response from $where is larger than $maxBytes bytes")
+                HttpOutcome(null)
+            } else {
+                val body = connection.inputStream.use { it.readBoundedUtf8(maxBytes) }
+                if (body == null) log("Lyrics: response from $where exceeded $maxBytes bytes")
+                HttpOutcome(body)
+            }
+        } catch (error: IOException) {
+            log("Lyrics: ${error.javaClass.simpleName} from $where (${error.message.orEmpty()})")
+            HttpOutcome(null)
         } finally {
             connection.disconnect()
         }
     }
+
+    /** Lists only the top-level JSON keys, so diagnostics never contain lyric text. */
+    private fun describePayload(body: String): String {
+        val trimmed = body.trim()
+        if (trimmed.startsWith("[")) return "top-level array"
+        val keys = runCatching { JSONObject(trimmed).keys().asSequence().take(8).toList() }
+            .getOrNull()
+            ?: return "not JSON"
+        return "keys: " + keys.joinToString(",")
+    }
+
+    /**
+     * Fallback: LRCLIB is a free public catalogue of synced (LRC) lyrics that
+     * needs no account. Used only when the Apple Music mirror yields nothing.
+     */
+    private fun findFromLrclib(request: LyricsRequest): LyricsState? {
+        val title = cleanSearchTitle(request.title).ifBlank { request.title.trim() }
+        val artist = primarySearchArtist(request.artist).ifBlank { request.artist.trim() }
+        if (title.isBlank() || artist.isBlank()) return null
+        val seconds = ((request.durationMs + 500L) / 1_000L).takeIf { it > 0L }
+
+        requestText(
+            LRCLIB_GET_URL + query(
+                "track_name" to title,
+                "artist_name" to artist,
+                "album_name" to request.album.trim(),
+                "duration" to seconds?.toString().orEmpty(),
+            ),
+            maxBytes = MAX_LYRICS_BYTES,
+            readTimeoutMs = LRCLIB_READ_TIMEOUT_MS,
+        )
+            ?.let { runCatching { JSONObject(it) }.getOrNull() }
+            ?.let(::parseLrclibItem)
+            ?.let { return it }
+
+        return requestText(
+            LRCLIB_SEARCH_URL + query(
+                "track_name" to title,
+                "artist_name" to artist,
+            ),
+            maxBytes = MAX_SEARCH_BYTES,
+            readTimeoutMs = LRCLIB_READ_TIMEOUT_MS,
+        )?.let { parseLrclibSearch(it, request) }
+    }
+
+    /**
+     * Runs the unofficial fallback catalogues side by side and keeps the best
+     * result: synced beats plain text beats "instrumental", and ties go to the
+     * source listed first (NetEase, QQ Music, LRCLIB).
+     */
+    private suspend fun findFromFallbackSources(request: LyricsRequest): LyricsState? {
+        log("Lyrics: no Apple Music lyrics, trying NetEase, QQ Music and LRCLIB")
+        val sources = listOf<Pair<String, (LyricsRequest) -> LyricsState?>>(
+            "NetEase" to ::findFromNetease,
+            "QQ Music" to ::findFromQqMusic,
+            "LRCLIB" to ::findFromLrclib,
+        )
+        val results = withTimeoutOrNull(FALLBACK_TIMEOUT_MS) {
+            coroutineScope {
+                sources.map { (name, lookup) ->
+                    async(Dispatchers.IO) {
+                        runCatching { lookup(request) }
+                            .onFailure { log("Lyrics: $name lookup failed (${it.javaClass.simpleName}: ${it.message.orEmpty()})") }
+                            .getOrNull()
+                            ?.also { log("Lyrics: $name returned ${it.status}") }
+                    }
+                }.awaitAll()
+            }
+        }.orEmpty()
+        return chooseFallback(results)
+    }
+
+    /** NetEase Cloud Music: keyless legacy web endpoints, LRC text. */
+    private fun findFromNetease(request: LyricsRequest): LyricsState? {
+        val term = fallbackSearchTerm(request)
+        if (term.isBlank()) return null
+        val search = requestText(
+            NETEASE_SEARCH_URL,
+            maxBytes = MAX_SEARCH_BYTES,
+            connectTimeoutMs = FALLBACK_CONNECT_TIMEOUT_MS,
+            readTimeoutMs = FALLBACK_READ_TIMEOUT_MS,
+            headers = mapOf("Referer" to "https://music.163.com/"),
+            postBody = query(
+                "s" to term,
+                "type" to "1",
+                "offset" to "0",
+                "limit" to "10",
+            ).removePrefix("?"),
+        ) ?: return null
+        for (id in rankNeteaseSongIds(search, request).take(MAX_FALLBACK_CANDIDATES)) {
+            val body = requestText(
+                NETEASE_LYRIC_URL + query(
+                    "id" to id.toString(),
+                    "lv" to "1",
+                    "kv" to "1",
+                    "tv" to "-1",
+                ),
+                maxBytes = MAX_LYRICS_BYTES,
+                connectTimeoutMs = FALLBACK_CONNECT_TIMEOUT_MS,
+                readTimeoutMs = FALLBACK_READ_TIMEOUT_MS,
+                headers = mapOf("Referer" to "https://music.163.com/"),
+            ) ?: continue
+            parseNeteaseLyric(body, id)?.let { return it }
+        }
+        return null
+    }
+
+    /** QQ Music: legacy y.qq.com endpoints; they only answer with a y.qq.com Referer. */
+    private fun findFromQqMusic(request: LyricsRequest): LyricsState? {
+        val term = fallbackSearchTerm(request)
+        if (term.isBlank()) return null
+        val referer = mapOf("Referer" to "https://y.qq.com/")
+        val search = requestText(
+            QQ_SEARCH_URL + query(
+                "w" to term,
+                "format" to "json",
+                "inCharset" to "utf-8",
+                "outCharset" to "utf-8",
+                "platform" to "yqq.json",
+                "needNewCode" to "0",
+                "n" to "10",
+                "p" to "1",
+                "t" to "0",
+            ),
+            maxBytes = MAX_SEARCH_BYTES,
+            connectTimeoutMs = FALLBACK_CONNECT_TIMEOUT_MS,
+            readTimeoutMs = FALLBACK_READ_TIMEOUT_MS,
+            headers = referer,
+        ) ?: return null
+        for (candidate in rankQqSongs(search, request).take(MAX_FALLBACK_CANDIDATES)) {
+            val body = requestText(
+                QQ_LYRIC_URL + query(
+                    "songmid" to candidate.mid,
+                    "format" to "json",
+                    "nobase64" to "1",
+                    "g_tk" to "5381",
+                    "inCharset" to "utf8",
+                    "outCharset" to "utf-8",
+                ),
+                maxBytes = MAX_LYRICS_BYTES,
+                connectTimeoutMs = FALLBACK_CONNECT_TIMEOUT_MS,
+                readTimeoutMs = FALLBACK_READ_TIMEOUT_MS,
+                headers = referer,
+            ) ?: continue
+            parseQqLyric(body, candidate.id)?.let { return it }
+        }
+        return null
+    }
+
+    private fun fallbackSearchTerm(request: LyricsRequest): String =
+        "${cleanSearchTitle(request.title)} ${primarySearchArtist(request.artist)}".trim()
 
     private fun InputStream.readBoundedUtf8(maxBytes: Int): String? {
         val output = ByteArrayOutputStream()
@@ -240,15 +453,38 @@ class AppleMusicLyricsClient {
         private const val ITUNES_LOOKUP_URL = "https://itunes.apple.com/lookup"
         private const val LYRICS_URL = "https://lyrics.paxsenix.org/apple-music/lyrics"
         private const val APPLE_MUSIC_SONG_URL = "https://music.apple.com/th/song"
+        private const val NETEASE_SEARCH_URL = "https://music.163.com/api/search/get/"
+        private const val NETEASE_LYRIC_URL = "https://music.163.com/api/song/lyric"
+        private const val QQ_SEARCH_URL = "https://c.y.qq.com/soso/fcgi-bin/client_search_cp"
+        private const val QQ_LYRIC_URL = "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg"
+        private const val LRCLIB_GET_URL = "https://lrclib.net/api/get"
+        private const val LRCLIB_SEARCH_URL = "https://lrclib.net/api/search"
         private val USER_AGENT =
             "AirplaySpeaker/${BuildConfig.VERSION_NAME} " +
                 "(https://github.com/l3kza08/Airplay-Speaker)"
         private const val MAX_SEARCH_BYTES = 1024 * 1024
-        private const val MAX_LYRICS_BYTES = 768 * 1024
+        // Syllable-synced responses for long songs can exceed the old 768 KB
+        // cap, which silently dropped otherwise valid lyrics.
+        private const val MAX_LYRICS_BYTES = 2 * 1024 * 1024
         private const val MAX_APPLE_PAGE_BYTES = 768 * 1024
         private const val CREDITS_TIMEOUT_MS = 3_800L
-        private const val LOOKUP_TIMEOUT_MS = 18_000L
-        private const val LYRICS_READ_TIMEOUT_MS = 5_500
+        // Whole lookup (Apple mirror first, then the fallback) and the share of
+        // it the Apple mirror may use. The service-level window must be larger.
+        private const val LOOKUP_TIMEOUT_MS = 46_000L
+        private const val APPLE_LOOKUP_TIMEOUT_MS = 24_000L
+        private const val FALLBACK_TIMEOUT_MS = 20_000L
+        private const val FALLBACK_CONNECT_TIMEOUT_MS = 3_000
+        private const val FALLBACK_READ_TIMEOUT_MS = 5_000
+        private const val MAX_FALLBACK_CANDIDATES = 3
+        // Different recordings of one song are usually several seconds apart,
+        // and LRC timings only fit the recording they were made for.
+        private const val FALLBACK_MAX_DURATION_DIFFERENCE_MS = 6_000L
+        // The mirror builds syllable timelines on demand and is often slower
+        // than the previous 5.5 s read timeout allowed.
+        private const val LYRICS_READ_TIMEOUT_MS = 10_000
+        private const val LRCLIB_READ_TIMEOUT_MS = 6_000
+        private const val RETRY_DELAY_MS = 700L
+        private const val LRCLIB_MAX_DURATION_DIFFERENCE_S = 3.0
         private const val MAX_CREDIT_SECTION_CHARS = 256 * 1024
         private const val CACHE_ENTRIES = 12
         private const val SEARCH_RESULT_LIMIT = 50
@@ -472,12 +708,42 @@ class AppleMusicLyricsClient {
 
         private const val MAX_DURATION_DIFFERENCE_MS = 90_000L
 
+        // The mirror's v2 payload has been seen with the row list under
+        // "lyrics" and under "content", and some deployments wrap it in an
+        // envelope. Reading only "lyrics" made every such response look empty.
+        private val lyricArrayKeys = listOf("lyrics", "content", "lines")
+        private val plainTextKeys = listOf("lyrics", "content", "plainLyrics", "plain")
+        private val envelopeKeys = listOf("data", "result", "response")
+        private val backgroundKeys = listOf("backgroundText", "background")
+
+        private fun lyricsArray(root: JSONObject): JSONArray? =
+            lyricArrayKeys.firstNotNullOfOrNull { root.optJSONArray(it) }
+
+        private fun plainText(root: JSONObject): String? = plainTextKeys.firstNotNullOfOrNull { key ->
+            (root.opt(key) as? String)?.trim()?.takeIf { it.isNotBlank() }
+        }
+
+        private fun unwrapPayload(value: String): JSONObject? {
+            val trimmed = value.trim()
+            if (trimmed.startsWith("[")) {
+                val array = runCatching { JSONArray(trimmed) }.getOrNull() ?: return null
+                return JSONObject().put("lyrics", array)
+            }
+            var current = runCatching { JSONObject(trimmed) }.getOrNull() ?: return null
+            for (depth in 0 until 2) {
+                if (lyricsArray(current) != null || plainText(current) != null) return current
+                current = envelopeKeys.firstNotNullOfOrNull { current.optJSONObject(it) }
+                    ?: return current
+            }
+            return current
+        }
+
         internal fun parseResponse(value: String, trackId: Long): LyricsState? {
-            val root = runCatching { JSONObject(value) }.getOrNull() ?: return null
-            val rawLines = root.optJSONArray("lyrics")
+            val root = unwrapPayload(value) ?: return null
+            val rawLines = lyricsArray(root)
             if (rawLines == null) {
-                val plainLyrics = root.optString("lyrics").trim()
-                return plainLyrics.takeIf { it.isNotBlank() }?.let {
+                val plainLyrics = plainText(root)
+                return plainLyrics?.let {
                     LyricsState(
                         status = LyricsStatus.PLAIN,
                         plainLyrics = it,
@@ -487,7 +753,7 @@ class AppleMusicLyricsClient {
                 }
             }
             val declaredWordTiming = declaredWordTiming(
-                root.optString("syncType", ""),
+                root.optString("syncType", "").ifBlank { root.optString("type", "") },
             )
             val allTexts = mutableListOf<String>()
             val parsedLines = buildList {
@@ -499,8 +765,12 @@ class AppleMusicLyricsClient {
                         fallbackEndMs = declaredEnd.takeIf { it > 0L },
                     )
                     val mainText = main.text
+                    val backgroundKey = backgroundKeys.firstOrNull { key ->
+                        val candidate = rawLine.opt(key)
+                        candidate is JSONArray || candidate is String
+                    }
                     val background = parseTextField(
-                        value = rawLine.opt("backgroundText"),
+                        value = backgroundKey?.let(rawLine::opt),
                         fallbackEndMs = declaredEnd.takeIf { it > 0L },
                     )
                     if (mainText.isBlank() && background.text.isBlank()) continue
@@ -657,6 +927,309 @@ class AppleMusicLyricsClient {
                 }
             }.distinct().joinToString(", ")
         }
+
+        private val lrcLeadingTimestamp = Regex("^\\[(\\d{1,3}):(\\d{2})(?:[.:](\\d{1,3}))?]")
+        private val lrcWordTag = Regex("<\\d{1,3}:\\d{2}(?:[.:]\\d{1,3})?>")
+
+        /**
+         * Parses LRC text ("[mm:ss.xx] lyric"). Metadata tags such as [ar:...]
+         * are ignored and each row ends where the next timestamp begins.
+         */
+        internal fun parseLrc(lrc: String): List<LyricLine> {
+            val rows = mutableListOf<Pair<Long, String>>()
+            for (rawLine in lrc.lineSequence()) {
+                var rest = rawLine.trim()
+                val times = mutableListOf<Long>()
+                while (true) {
+                    val match = lrcLeadingTimestamp.find(rest) ?: break
+                    val minutes = match.groupValues[1].toLong()
+                    val seconds = match.groupValues[2].toLong()
+                    val fraction = match.groupValues[3].padEnd(3, '0').take(3).toLong()
+                    times += minutes * 60_000L + seconds * 1_000L + fraction
+                    rest = rest.substring(match.range.last + 1).trimStart()
+                }
+                if (times.isEmpty()) continue
+                val text = rest.replace(lrcWordTag, "").trim()
+                times.forEach { rows += it to text }
+            }
+            rows.sortBy { it.first }
+            return buildList {
+                for (index in rows.indices) {
+                    val (timeMs, text) = rows[index]
+                    if (text.isBlank()) continue
+                    val nextTime = rows.getOrNull(index + 1)?.first
+                    add(
+                        LyricLine(
+                            timeMs = timeMs,
+                            text = text,
+                            endMs = nextTime?.takeIf { it > timeMs },
+                        )
+                    )
+                }
+            }
+        }
+
+        internal fun parseLrclibItem(item: JSONObject): LyricsState? {
+            val id = item.optLong("id", -1L).takeIf { it > 0L }
+            if (item.optBoolean("instrumental", false)) {
+                return LyricsState(status = LyricsStatus.INSTRUMENTAL, sourceId = id)
+            }
+            val lines = parseLrc((item.opt("syncedLyrics") as? String).orEmpty())
+            if (lines.isNotEmpty()) {
+                return LyricsState(
+                    status = LyricsStatus.SYNCED,
+                    lines = lines,
+                    plainLyrics = lines.joinToString("\n") { it.text },
+                    sourceId = id,
+                    wordSyncMode = WordSyncMode.LINE,
+                )
+            }
+            val plain = (item.opt("plainLyrics") as? String)?.trim().orEmpty()
+            return plain.takeIf { it.isNotBlank() }?.let {
+                LyricsState(
+                    status = LyricsStatus.PLAIN,
+                    plainLyrics = it,
+                    sourceId = id,
+                    wordSyncMode = WordSyncMode.NONE,
+                )
+            }
+        }
+
+        /** Picks the closest-duration synced match from an LRCLIB search result list. */
+        internal fun parseLrclibSearch(value: String, request: LyricsRequest): LyricsState? {
+            val array = runCatching { JSONArray(value) }.getOrNull() ?: return null
+            val wantedTitle = normalize(request.title)
+            val wantedArtist = normalize(primarySearchArtist(request.artist))
+            val wantedSeconds = request.durationMs / 1_000.0
+            val candidates = (0 until array.length())
+                .mapNotNull { array.optJSONObject(it) }
+                .filter { item ->
+                    matchScore(normalize(item.optString("trackName")), wantedTitle) > 0 &&
+                        matchScore(
+                            normalize(primarySearchArtist(item.optString("artistName"))),
+                            wantedArtist,
+                        ) > 0
+                }
+                .map { item ->
+                    val difference = if (request.durationMs > 0L && item.has("duration")) {
+                        kotlin.math.abs(item.optDouble("duration", 0.0) - wantedSeconds)
+                    } else {
+                        0.0
+                    }
+                    item to difference
+                }
+                .filter { (_, difference) -> difference <= LRCLIB_MAX_DURATION_DIFFERENCE_S }
+                .sortedWith(
+                    compareByDescending<Pair<JSONObject, Double>> { (item, _) ->
+                        !(item.opt("syncedLyrics") as? String).isNullOrBlank()
+                    }.thenBy { it.second }
+                )
+            return candidates.firstNotNullOfOrNull { (item, _) -> parseLrclibItem(item) }
+        }
+
+        private val creditRow = Regex(
+            "^(?:作词|作曲|编曲|制作人?|监制|混音|母带|录音|和声|词|曲|" +
+                "lyrics?|lyricist|composer|composed by|written by|arranger|producer)\\s*[:：]",
+            RegexOption.IGNORE_CASE,
+        )
+        private val htmlEntity = Regex("&(#x[0-9a-fA-F]+|#\\d+|amp|lt|gt|quot|apos|nbsp);")
+
+        /** Chinese catalogues put "作词 : …" credit rows before the first sung line. */
+        internal fun parseProviderLrc(lrc: String): List<LyricLine> =
+            parseLrc(lrc).filterIndexed { index, line ->
+                !(index < MAX_LEADING_CREDIT_ROWS && creditRow.containsMatchIn(line.text))
+            }
+
+        private const val MAX_LEADING_CREDIT_ROWS = 12
+
+        /** QQ Music returns lyrics with HTML entities such as "&#10;" and "&#58;". */
+        internal fun htmlUnescape(value: String): String {
+            if ('&' !in value) return value
+            return htmlEntity.replace(value) { match ->
+                val entity = match.groupValues[1]
+                when {
+                    entity.startsWith("#x", ignoreCase = true) ->
+                        entity.substring(2).toIntOrNull(16)?.let(::codePointToString)
+                    entity.startsWith("#") ->
+                        entity.substring(1).toIntOrNull()?.let(::codePointToString)
+                    entity == "amp" -> "&"
+                    entity == "lt" -> "<"
+                    entity == "gt" -> ">"
+                    entity == "quot" -> "\""
+                    entity == "apos" -> "'"
+                    entity == "nbsp" -> " "
+                    else -> null
+                } ?: match.value
+            }
+        }
+
+        private fun codePointToString(codePoint: Int): String? =
+            runCatching { String(Character.toChars(codePoint)) }.getOrNull()
+
+        private fun jsonObjectFromPossiblyWrapped(value: String): JSONObject? {
+            val start = value.indexOf('{')
+            val end = value.lastIndexOf('}')
+            if (start < 0 || end <= start) return null
+            return runCatching { JSONObject(value.substring(start, end + 1)) }.getOrNull()
+        }
+
+        /** Shared candidate scoring for the keyless fallback catalogues; null = reject. */
+        private fun fallbackMatchScore(
+            request: LyricsRequest,
+            title: String,
+            artists: List<String>,
+            album: String,
+            durationMs: Long,
+        ): Int? {
+            val titleScore = matchScore(normalize(title), normalize(request.title))
+            if (titleScore <= 0) return null
+            val wantedArtist = normalize(request.artist)
+            val wantedPrimaryArtist = normalize(primarySearchArtist(request.artist))
+            val artistScore = (artists + artists.joinToString(" "))
+                .maxOfOrNull { name ->
+                    val candidate = normalize(name)
+                    maxOf(
+                        matchScore(candidate, wantedArtist),
+                        matchScore(candidate, wantedPrimaryArtist),
+                    )
+                } ?: 0
+            if (wantedArtist.isNotBlank() && artistScore <= 0) return null
+
+            var score = titleScore + artistScore
+            val wantedAlbum = normalize(request.album)
+            val candidateAlbum = normalize(album)
+            if (wantedAlbum.isNotBlank() && candidateAlbum.isNotBlank()) {
+                score += when {
+                    candidateAlbum == wantedAlbum -> 110
+                    closeMatch(candidateAlbum, wantedAlbum) -> 45
+                    else -> 0
+                }
+            }
+            if (request.durationMs > 0L && durationMs > 0L) {
+                val difference = kotlin.math.abs(request.durationMs - durationMs)
+                if (difference > FALLBACK_MAX_DURATION_DIFFERENCE_MS) return null
+                score += if (difference <= 2_000L) 65 else 35
+            }
+            return score
+        }
+
+        private fun JSONArray?.artistNames(): List<String> {
+            if (this == null) return emptyList()
+            return (0 until length()).mapNotNull { index ->
+                optJSONObject(index)?.optString("name")?.takeIf { it.isNotBlank() }
+            }
+        }
+
+        internal fun rankNeteaseSongIds(value: String, request: LyricsRequest): List<Long> {
+            val songs = runCatching {
+                JSONObject(value).optJSONObject("result")?.optJSONArray("songs")
+            }.getOrNull() ?: return emptyList()
+            val ranked = mutableListOf<Pair<Long, Int>>()
+            for (index in 0 until songs.length()) {
+                val item = songs.optJSONObject(index) ?: continue
+                val id = item.optLong("id", -1L)
+                if (id <= 0L) continue
+                val score = fallbackMatchScore(
+                    request = request,
+                    title = item.optString("name"),
+                    artists = (item.optJSONArray("artists") ?: item.optJSONArray("ar")).artistNames(),
+                    album = (item.optJSONObject("album") ?: item.optJSONObject("al"))
+                        ?.optString("name").orEmpty(),
+                    durationMs = maxOf(item.optLong("duration", 0L), item.optLong("dt", 0L)),
+                ) ?: continue
+                ranked += id to score
+            }
+            return ranked
+                .sortedWith(compareByDescending<Pair<Long, Int>> { it.second }.thenBy { it.first })
+                .map { it.first }
+                .distinct()
+        }
+
+        internal fun parseNeteaseLyric(value: String, songId: Long): LyricsState? {
+            val root = runCatching { JSONObject(value) }.getOrNull() ?: return null
+            if (root.optBoolean("uncollected", false)) return null
+            if (root.optBoolean("nolyric", false)) {
+                return LyricsState(status = LyricsStatus.INSTRUMENTAL, sourceId = songId)
+            }
+            val lrc = (root.optJSONObject("lrc")?.opt("lyric") as? String).orEmpty()
+            val lines = parseProviderLrc(lrc)
+            if (lines.isNotEmpty()) {
+                return LyricsState(
+                    status = LyricsStatus.SYNCED,
+                    lines = lines,
+                    plainLyrics = lines.joinToString("\n") { it.text },
+                    sourceId = songId,
+                    wordSyncMode = WordSyncMode.LINE,
+                )
+            }
+            return lrc.trim().takeIf { it.isNotBlank() }?.let {
+                LyricsState(
+                    status = LyricsStatus.PLAIN,
+                    plainLyrics = it,
+                    sourceId = songId,
+                    wordSyncMode = WordSyncMode.NONE,
+                )
+            }
+        }
+
+        internal data class QqSong(val mid: String, val id: Long)
+
+        internal fun rankQqSongs(value: String, request: LyricsRequest): List<QqSong> {
+            val songs = runCatching {
+                jsonObjectFromPossiblyWrapped(value)
+                    ?.optJSONObject("data")
+                    ?.optJSONObject("song")
+                    ?.optJSONArray("list")
+            }.getOrNull() ?: return emptyList()
+            val ranked = mutableListOf<Pair<QqSong, Int>>()
+            for (index in 0 until songs.length()) {
+                val item = songs.optJSONObject(index) ?: continue
+                val mid = item.optString("songmid").trim()
+                if (mid.isEmpty()) continue
+                val score = fallbackMatchScore(
+                    request = request,
+                    title = item.optString("songname"),
+                    artists = item.optJSONArray("singer").artistNames(),
+                    album = item.optString("albumname"),
+                    durationMs = item.optLong("interval", 0L) * 1_000L,
+                ) ?: continue
+                ranked += QqSong(mid, item.optLong("songid", -1L).takeIf { it > 0L } ?: 0L) to score
+            }
+            return ranked
+                .sortedWith(compareByDescending<Pair<QqSong, Int>> { it.second }.thenBy { it.first.mid })
+                .map { it.first }
+                .distinctBy { it.mid }
+        }
+
+        internal fun parseQqLyric(value: String, songId: Long): LyricsState? {
+            val root = jsonObjectFromPossiblyWrapped(value) ?: return null
+            if (root.optLong("retcode", root.optLong("code", 0L)) != 0L) return null
+            val lrc = htmlUnescape((root.opt("lyric") as? String).orEmpty())
+            val lines = parseProviderLrc(lrc)
+            if (lines.isEmpty()) return null
+            return LyricsState(
+                status = LyricsStatus.SYNCED,
+                lines = lines,
+                plainLyrics = lines.joinToString("\n") { it.text },
+                sourceId = songId.takeIf { it > 0L },
+                wordSyncMode = WordSyncMode.LINE,
+            )
+        }
+
+        private fun fallbackRank(status: LyricsStatus): Int = when (status) {
+            LyricsStatus.SYNCED -> 0
+            LyricsStatus.PLAIN -> 1
+            LyricsStatus.INSTRUMENTAL -> 2
+            else -> 3
+        }
+
+        /** [results] are in source-priority order; synced beats plain beats instrumental. */
+        internal fun chooseFallback(results: List<LyricsState?>): LyricsState? = results
+            .mapIndexedNotNull { index, state -> state?.let { index to it } }
+            .minWithOrNull(
+                compareBy<Pair<Int, LyricsState>>({ fallbackRank(it.second.status) }, { it.first })
+            )
+            ?.second
 
         private fun extractJsonArray(value: String, startIndex: Int): String? {
             if (startIndex !in value.indices || value[startIndex] != '[') return null
