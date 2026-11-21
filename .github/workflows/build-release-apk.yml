@@ -5,6 +5,8 @@ name: Build optimized release APK
 # NOTE: its signature differs from the debug APK; uninstall the old app first.
 on:
   workflow_dispatch:
+  push:
+    branches: [feat/apple-wordsync-lyrics]
 
 jobs:
   build:
