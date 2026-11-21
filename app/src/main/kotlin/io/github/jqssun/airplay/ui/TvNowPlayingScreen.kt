@@ -2962,6 +2962,12 @@ internal fun splitLyricDisplayParts(line: LyricLine): LyricDisplayParts {
 
 private const val BACKGROUND_VOCAL_LEAD_THRESHOLD_MS = 240L
 
+/**
+ * Lyric text only (not the surrounding interface). The original 50sp rows were
+ * oversized on a TV; this keeps them large enough to read from a sofa.
+ */
+private const val LyricTextScale = 0.8f
+
 @Composable
 private fun ScrollableLyricLine(
     line: LyricLine,
@@ -3102,8 +3108,8 @@ private fun ScrollableLyricLine(
                         // Active and inactive rows share identical measured
                         // typography. Alpha, blur and a paint-only layer carry
                         // the emphasis without changing line wrapping.
-                        fontSize = (50f * scale).sp,
-                        lineHeight = (60f * scale).sp,
+                        fontSize = (50f * LyricTextScale * scale).sp,
+                        lineHeight = (60f * LyricTextScale * scale).sp,
                         fontWeight = FontWeight.Black,
                         maxLines = 3,
                         overflow = TextOverflow.Ellipsis,
@@ -3112,6 +3118,22 @@ private fun ScrollableLyricLine(
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
+            }
+
+            if (line.translation.isNotBlank()) {
+                Spacer(Modifier.height((6f * scale).dp))
+                Text(
+                    line.translation,
+                    color = paper.copy(alpha = if (isActive) 0.62f else 0.42f),
+                    fontSize = (26f * LyricTextScale * scale).sp,
+                    lineHeight = (33f * LyricTextScale * scale).sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = textAlign,
+                    style = TextStyle(textDirection = TextDirection.Content),
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
 
             if (displayParts.asidePlacement == LyricAsidePlacement.BELOW) {
@@ -3161,8 +3183,8 @@ private fun ParentheticalLyric(
             accent = accent,
             paper = paper,
             scale = scale,
-            fontSize = 27f,
-            lineHeight = 34f,
+            fontSize = 27f * LyricTextScale,
+            lineHeight = 34f * LyricTextScale,
             fontWeight = FontWeight.Bold,
             maxLines = 2,
             textAlign = textAlign,
@@ -3174,8 +3196,8 @@ private fun ParentheticalLyric(
         Text(
             text = stableAside,
             color = paper.copy(alpha = if (active) 0.48f else 0.35f),
-            fontSize = (27f * scale).sp,
-            lineHeight = (34f * scale).sp,
+            fontSize = (27f * LyricTextScale * scale).sp,
+            lineHeight = (34f * LyricTextScale * scale).sp,
             fontWeight = FontWeight.Bold,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
@@ -3410,8 +3432,8 @@ private fun stalePlaceholder(
             Text(
                 line.text.ifBlank { "♪" },
                 color = paper,
-                fontSize = (46f * scale).sp,
-                lineHeight = (56f * scale).sp,
+                fontSize = (46f * LyricTextScale * scale).sp,
+                lineHeight = (56f * LyricTextScale * scale).sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
@@ -3543,8 +3565,8 @@ private fun PlainLyrics(
                 Text(
                     text = line,
                     color = paper.copy(alpha = 0.9f),
-                    fontSize = (35f * scale).sp,
-                    lineHeight = (45f * scale).sp,
+                    fontSize = (35f * LyricTextScale * scale).sp,
+                    lineHeight = (45f * LyricTextScale * scale).sp,
                     fontWeight = FontWeight.SemiBold,
                     style = TextStyle(textDirection = TextDirection.Content),
                 )
@@ -3596,8 +3618,8 @@ private fun ProgressiveWordLine(
     accent: Color,
     paper: Color,
     scale: Float,
-    fontSize: Float = 50f,
-    lineHeight: Float = 60f,
+    fontSize: Float = 50f * LyricTextScale,
+    lineHeight: Float = 60f * LyricTextScale,
     fontWeight: FontWeight = FontWeight.Black,
     maxLines: Int = 3,
     textAlign: TextAlign = TextAlign.Start,

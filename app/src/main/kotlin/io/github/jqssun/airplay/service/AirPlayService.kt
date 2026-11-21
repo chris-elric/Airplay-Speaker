@@ -43,6 +43,7 @@ import io.github.jqssun.airplay.bridge.RaopCallbackHandler
 import io.github.jqssun.airplay.discovery.NsdServiceManager
 import io.github.jqssun.airplay.download.VideoDownloader
 import io.github.jqssun.airplay.lyrics.AppleMusicLyricsClient
+import io.github.jqssun.airplay.lyrics.LyricsSettings
 import io.github.jqssun.airplay.lyrics.LyricsRequest
 import io.github.jqssun.airplay.lyrics.LyricsState
 import io.github.jqssun.airplay.lyrics.LyricsStatus
@@ -167,7 +168,20 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
     val trackInfo = _trackInfo.asStateFlow()
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val appleMusicLyricsClient = AppleMusicLyricsClient(log = { message -> log(message) })
+    private val appleMusicLyricsClient = AppleMusicLyricsClient(
+        log = { message -> log(message) },
+        settings = {
+            val prefs = getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
+            LyricsSettings(
+                appleMediaUserToken = prefs.getString(Prefs.APPLE_MEDIA_USER_TOKEN, Prefs.DEF_APPLE_MEDIA_USER_TOKEN).orEmpty(),
+                musixmatchToken = prefs.getString(Prefs.MUSIXMATCH_TOKEN, Prefs.DEF_MUSIXMATCH_TOKEN).orEmpty(),
+                translationEnabled = prefs.getBoolean(Prefs.LYRICS_TRANSLATION, Prefs.DEF_LYRICS_TRANSLATION),
+                translationLanguage = prefs.getString(Prefs.LYRICS_TRANSLATION_LANGUAGE, Prefs.DEF_LYRICS_TRANSLATION_LANGUAGE)
+                    .orEmpty().ifBlank { Prefs.DEF_LYRICS_TRANSLATION_LANGUAGE },
+            )
+        },
+    )
+    private var lastLyricsRequest: LyricsRequest? = null
     private val _lyrics = MutableStateFlow(LyricsState())
     val lyrics = _lyrics.asStateFlow()
     private var lyricsJob: Job? = null
@@ -1096,7 +1110,36 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
                     "score=${finalResult.wordTimingQualityScore(duration)})"
             )
             synchronized(this@AirPlayService) {
-                if (lyricsKey == key) _lyrics.value = finalResult
+                if (lyricsKey == key) {
+                    _lyrics.value = finalResult
+                    lastLyricsRequest = request
+                }
+            }
+            // Translation arrives a moment later so the original lyrics never wait for it.
+            if (finalResult.lines.isNotEmpty()) {
+                val translated = appleMusicLyricsClient.withTranslation(finalResult, request)
+                if (translated !== finalResult) {
+                    synchronized(this@AirPlayService) {
+                        if (lyricsKey == key) _lyrics.value = translated
+                    }
+                }
+            }
+        }
+    }
+
+    /** Called when the translation setting changes, so the current song updates immediately. */
+    fun refreshLyricTranslation() {
+        val request = lastLyricsRequest ?: return
+        val key = lyricsKey
+        val current = _lyrics.value
+        if (current.lines.isEmpty()) return
+        serviceScope.launch(Dispatchers.Default) {
+            val prefs = getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
+            val enabled = prefs.getBoolean(Prefs.LYRICS_TRANSLATION, Prefs.DEF_LYRICS_TRANSLATION)
+            val base = if (enabled) current else current.copy(lines = current.lines.map { it.copy(translation = "") })
+            val updated = if (enabled) appleMusicLyricsClient.withTranslation(base.copy(lines = base.lines.map { it.copy(translation = "") }), request) else base
+            synchronized(this@AirPlayService) {
+                if (lyricsKey == key) _lyrics.value = updated
             }
         }
     }

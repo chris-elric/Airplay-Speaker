@@ -245,6 +245,27 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     )
     val lyricsVisible: StateFlow<Boolean> = _lyricsVisible.asStateFlow()
 
+    private val _appleMediaUserToken = MutableStateFlow(
+        prefs.getString(Prefs.APPLE_MEDIA_USER_TOKEN, Prefs.DEF_APPLE_MEDIA_USER_TOKEN).orEmpty()
+    )
+    val appleMediaUserToken: StateFlow<String> = _appleMediaUserToken.asStateFlow()
+
+    private val _musixmatchToken = MutableStateFlow(
+        prefs.getString(Prefs.MUSIXMATCH_TOKEN, Prefs.DEF_MUSIXMATCH_TOKEN).orEmpty()
+    )
+    val musixmatchToken: StateFlow<String> = _musixmatchToken.asStateFlow()
+
+    private val _lyricsTranslation = MutableStateFlow(
+        prefs.getBoolean(Prefs.LYRICS_TRANSLATION, Prefs.DEF_LYRICS_TRANSLATION)
+    )
+    val lyricsTranslation: StateFlow<Boolean> = _lyricsTranslation.asStateFlow()
+
+    private val _lyricsTranslationLanguage = MutableStateFlow(
+        prefs.getString(Prefs.LYRICS_TRANSLATION_LANGUAGE, Prefs.DEF_LYRICS_TRANSLATION_LANGUAGE)
+            .orEmpty().ifBlank { Prefs.DEF_LYRICS_TRANSLATION_LANGUAGE }
+    )
+    val lyricsTranslationLanguage: StateFlow<String> = _lyricsTranslationLanguage.asStateFlow()
+
     private val initialAppVolume = prefs.getInt(Prefs.APP_VOLUME, Prefs.DEF_APP_VOLUME)
         .coerceIn(0, 100)
     private val _appVolume = MutableStateFlow(initialAppVolume)
@@ -575,6 +596,27 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     fun setLyricsVisible(v: Boolean) {
         _lyricsVisible.value = v
         prefs.edit().putBoolean(Prefs.LYRICS_VISIBLE, v).apply()
+    }
+    fun setAppleMediaUserToken(v: String) {
+        val value = v.trim()
+        _appleMediaUserToken.value = value
+        prefs.edit().putString(Prefs.APPLE_MEDIA_USER_TOKEN, value).apply()
+    }
+    fun setMusixmatchToken(v: String) {
+        val value = v.trim()
+        _musixmatchToken.value = value
+        prefs.edit().putString(Prefs.MUSIXMATCH_TOKEN, value).apply()
+    }
+    fun setLyricsTranslation(v: Boolean) {
+        _lyricsTranslation.value = v
+        prefs.edit().putBoolean(Prefs.LYRICS_TRANSLATION, v).apply()
+        service?.refreshLyricTranslation()
+    }
+    fun setLyricsTranslationLanguage(v: String) {
+        val value = v.trim().ifBlank { Prefs.DEF_LYRICS_TRANSLATION_LANGUAGE }
+        _lyricsTranslationLanguage.value = value
+        prefs.edit().putString(Prefs.LYRICS_TRANSLATION_LANGUAGE, value).apply()
+        service?.refreshLyricTranslation()
     }
     private fun setAppVolume(percent: Int) {
         val value = percent.coerceIn(0, 100)

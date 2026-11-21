@@ -1,0 +1,45 @@
+name: Build optimized release APK
+
+# Manual build of the minified, resource-shrunk (smaller, lighter) APK.
+# A throw-away keystore is generated for the run so no secrets are needed.
+# NOTE: its signature differs from the debug APK; uninstall the old app first.
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Use JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: "zulu"
+          java-version: "21"
+          cache: "gradle"
+
+      - name: Create signing key
+        run: |
+          keytool -genkeypair -keystore "$RUNNER_TEMP/release.jks" -storepass airplay123 \
+            -keypass airplay123 -alias airplay -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Airplay Speaker"
+          {
+            echo "storeFile=$RUNNER_TEMP/release.jks"
+            echo "storePassword=airplay123"
+            echo "keyAlias=airplay"
+            echo "keyPassword=airplay123"
+          } >> local.properties
+
+      - name: Build release APK
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleRelease --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: airplay-speaker-release-apk
+          path: app/build/outputs/apk/release/*.apk

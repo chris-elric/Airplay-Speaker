@@ -40,6 +40,10 @@ object Prefs {
     const val MOTION_ARTWORK_ENABLED = "motion_artwork_enabled"; const val DEF_MOTION_ARTWORK_ENABLED = true
     const val FULLSCREEN_MOTION_ARTWORK = "fullscreen_motion_artwork"; const val DEF_FULLSCREEN_MOTION_ARTWORK = true
     const val LYRICS_VISIBLE = "lyrics_visible"; const val DEF_LYRICS_VISIBLE = true
+    const val APPLE_MEDIA_USER_TOKEN = "apple_media_user_token"; const val DEF_APPLE_MEDIA_USER_TOKEN = ""
+    const val MUSIXMATCH_TOKEN = "musixmatch_token"; const val DEF_MUSIXMATCH_TOKEN = ""
+    const val LYRICS_TRANSLATION = "lyrics_translation"; const val DEF_LYRICS_TRANSLATION = false
+    const val LYRICS_TRANSLATION_LANGUAGE = "lyrics_translation_language"; const val DEF_LYRICS_TRANSLATION_LANGUAGE = "es"
     const val AUTO_FULLSCREEN = "auto_fullscreen"; const val DEF_AUTO_FULLSCREEN = true
     const val KEEP_SCREEN_ON = "keep_screen_on"; const val DEF_KEEP_SCREEN_ON = true
     const val ADVERTISE_VIDEO = "advertise_video"; const val DEF_ADVERTISE_VIDEO = false

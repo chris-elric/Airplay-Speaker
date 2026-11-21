@@ -21,6 +21,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -68,6 +69,10 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val scheduledOutputBufferRelease by viewModel.scheduledOutputBufferRelease.collectAsState()
     val benchmarkLog by viewModel.benchmarkLog.collectAsState()
     val audioBufferMultiplier by viewModel.audioBufferMultiplier.collectAsState()
+    val appleMediaUserToken by viewModel.appleMediaUserToken.collectAsState()
+    val musixmatchToken by viewModel.musixmatchToken.collectAsState()
+    val lyricsTranslation by viewModel.lyricsTranslation.collectAsState()
+    val lyricsTranslationLanguage by viewModel.lyricsTranslationLanguage.collectAsState()
 
     Column(
         modifier = Modifier
@@ -236,6 +241,40 @@ fun SettingsScreen(viewModel: MainViewModel) {
             description = stringResource(R.string.setting_overscanned_desc),
             checked = overscanned,
             onCheckedChange = { viewModel.setOverscanned(it) }
+        )
+
+        SectionHeader(stringResource(R.string.section_lyrics))
+
+        SettingSecretField(
+            title = stringResource(R.string.setting_apple_token),
+            description = stringResource(R.string.setting_apple_token_desc),
+            value = appleMediaUserToken,
+            label = stringResource(R.string.setting_apple_token_label),
+            onSave = { viewModel.setAppleMediaUserToken(it) }
+        )
+
+        SettingSwitch(
+            title = stringResource(R.string.setting_lyrics_translation),
+            description = stringResource(R.string.setting_lyrics_translation_desc),
+            checked = lyricsTranslation,
+            onCheckedChange = { viewModel.setLyricsTranslation(it) }
+        )
+
+        SettingChipField(
+            title = stringResource(R.string.setting_lyrics_translation_language),
+            description = stringResource(R.string.setting_lyrics_translation_language_desc),
+            value = lyricsTranslationLanguage,
+            presets = listOf("es" to "Español", "en" to "English", "pt" to "Português", "fr" to "Français"),
+            placeholder = stringResource(R.string.setting_lyrics_translation_language_placeholder),
+            onValueChange = { viewModel.setLyricsTranslationLanguage(it) }
+        )
+
+        SettingSecretField(
+            title = stringResource(R.string.setting_musixmatch_token),
+            description = stringResource(R.string.setting_musixmatch_token_desc),
+            value = musixmatchToken,
+            label = stringResource(R.string.setting_musixmatch_token_label),
+            onSave = { viewModel.setMusixmatchToken(it) }
         )
 
         SectionHeader(stringResource(R.string.section_decode))
@@ -610,6 +649,43 @@ private fun SettingChipField(
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
+            }
+        }
+    )
+}
+
+@Composable
+private fun SettingSecretField(
+    title: String,
+    description: String,
+    value: String,
+    label: String,
+    onSave: (String) -> Unit,
+) {
+    var text by remember(value) { mutableStateOf(value) }
+    val focus = LocalFocusManager.current
+    ListItem(
+        headlineContent = { Text(title) },
+        supportingContent = {
+            Column {
+                Text(description)
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    singleLine = true,
+                    label = { Text(label) },
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Password,
+                        imeAction = ImeAction.Done
+                    ),
+                    keyboardActions = KeyboardActions(onDone = {
+                        onSave(text)
+                        focus.clearFocus()
+                    }),
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         }
     )

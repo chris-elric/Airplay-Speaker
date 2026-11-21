@@ -26,7 +26,32 @@ import org.json.JSONObject
 class AppleMusicLyricsClient(
     /** Receives short diagnostics so lookup failures show up in the in-app log. */
     private val log: (String) -> Unit = {},
+    /** Read fresh on every lookup so Settings changes apply to the next song. */
+    private val settings: () -> LyricsSettings = { LyricsSettings() },
 ) {
+
+    private val http = LyricsHttp(log, USER_AGENT)
+    private val appleDirect = AppleMusicDirectClient(http, log)
+    private val translator = LyricsTranslator(http, log)
+
+    /**
+     * Adds a per-line translation (target language from Settings) to [state].
+     * Returns [state] untouched when translation is off, already present, or
+     * no source could translate it.
+     */
+    suspend fun withTranslation(state: LyricsState, request: LyricsRequest): LyricsState =
+        withContext(Dispatchers.IO) {
+            val config = settings()
+            if (!config.translationEnabled || state.lines.isEmpty()) return@withContext state
+            val translated = withTimeoutOrNull(TRANSLATION_TIMEOUT_MS) {
+                runCatching {
+                    translator.translate(state.lines, request, config.translationLanguage, config.musixmatchToken)
+                }.getOrNull()
+            } ?: return@withContext state
+            state.copy(lines = state.lines.mapIndexed { index, line ->
+                translated.getOrNull(index)?.takeIf { it.isNotBlank() }?.let { line.copy(translation = it) } ?: line
+            })
+        }
 
     private val cache = object : LinkedHashMap<String, LyricsState>(16, 0.75f, true) {
         override fun removeEldestEntry(
@@ -41,19 +66,99 @@ class AppleMusicLyricsClient(
 
         val result = withTimeoutOrNull(LOOKUP_TIMEOUT_MS) {
             val apple = withTimeoutOrNull(APPLE_LOOKUP_TIMEOUT_MS) {
-                runCatching { findUncached(request) }
+                runCatching { findFromAppleSources(request) }
                     .onFailure { log("Lyrics: Apple lookup failed (${it.javaClass.simpleName}: ${it.message.orEmpty()})") }
                     .getOrNull()
             }
-            apple ?: findFromFallbackSources(request)
+            if (apple != null && apple.wordSyncMode == WordSyncMode.ENHANCED) {
+                apple
+            } else {
+                // Apple had nothing, or only whole-line timing: look for a
+                // word-timed copy elsewhere before settling.
+                val other = findFromFallbackSources(request)
+                when {
+                    other != null && other.wordSyncMode == WordSyncMode.ENHANCED -> other
+                    apple != null && apple.status == LyricsStatus.SYNCED -> apple
+                    else -> apple ?: other
+                }
+            }
         }
         result?.also { resolved ->
             synchronized(cache) { cache[cacheKey] = resolved }
         }
     }
 
-    private suspend fun findUncached(request: LyricsRequest): LyricsState? = coroutineScope {
-        val searchResponses = searchRequests(request)
+
+    /**
+     * Apple Music first. The three Apple-origin routes run side by side and the
+     * best one wins, in this order of trust: the user's own Apple account
+     * (syllable-lyrics), the open LyricsPlus aggregator pinned to Apple's data,
+     * then the paxsenix mirror. Word-timed results beat line-timed ones.
+     */
+    private suspend fun findFromAppleSources(request: LyricsRequest): LyricsState? = coroutineScope {
+        val config = settings()
+        val candidates = async(Dispatchers.IO) { searchCandidateIds(request) }
+        val language = if (config.translationEnabled) config.translationLanguage else ""
+
+        val direct = async(Dispatchers.IO) {
+            if (AppleMusicDirectClient.normalizeUserToken(config.appleMediaUserToken).isEmpty()) {
+                log("Lyrics: no Apple Music token saved; add one in Settings for the most reliable word-by-word lyrics")
+                return@async null
+            }
+            runCatching {
+                val ids = candidates.await().take(MAX_DIRECT_CANDIDATES)
+                resolveFirstCandidate(ids) { id ->
+                    appleDirect.fetch(id, config.appleMediaUserToken, language)
+                }?.second
+            }.onFailure { log("Lyrics: Apple Music account lookup failed (${it.javaClass.simpleName})") }
+                .getOrNull()
+                ?.also { log("Lyrics: Apple Music account returned ${it.status} / ${it.wordSyncMode}") }
+        }
+        val plus = async(Dispatchers.IO) {
+            runCatching { findFromLyricsPlus(request, LyricsPlus.SOURCE_APPLE) }
+                .onFailure { log("Lyrics: LyricsPlus lookup failed (${it.javaClass.simpleName})") }
+                .getOrNull()
+                ?.also { log("Lyrics: LyricsPlus(Apple) returned ${it.status} / ${it.wordSyncMode}") }
+        }
+        val mirror = async(Dispatchers.IO) {
+            runCatching { findUncached(request, candidates) }
+                .onFailure { log("Lyrics: Apple mirror failed (${it.javaClass.simpleName}: ${it.message.orEmpty()})") }
+                .getOrNull()
+                ?.also { log("Lyrics: Apple mirror returned ${it.status} / ${it.wordSyncMode}") }
+        }
+        val results = listOf(direct, plus, mirror).awaitAll().filterNotNull()
+        results.firstOrNull { it.wordSyncMode == WordSyncMode.ENHANCED }
+            ?: results.firstOrNull { it.status == LyricsStatus.SYNCED }
+            ?: results.firstOrNull()
+    }
+
+    /** LyricsPlus aggregator; returns the first mirror that has the song. */
+    private fun findFromLyricsPlus(request: LyricsRequest, sources: String): LyricsState? {
+        val params = lyricsQuery(
+            "title" to request.title,
+            "artist" to request.artist,
+            "album" to request.album,
+            "duration" to (request.durationMs / 1_000L).takeIf { it > 0 }?.toString().orEmpty(),
+            "source" to sources,
+        )
+        for (base in LyricsPlus.BASE_URLS.take(MAX_LYRICSPLUS_MIRRORS)) {
+            val response = http.get(
+                "$base/v2/lyrics/get$params",
+                maxBytes = MAX_LYRICS_BYTES,
+                connectTimeoutMs = 2_500,
+                readTimeoutMs = 7_000,
+            )
+            if (response.code == 404) return null
+            val body = response.body ?: continue
+            val converted = LyricsPlus.convert(body) ?: continue
+            val state = parseResponse(converted.json.toString(), 0L) ?: continue
+            return state.copy(writerCredit = converted.songwriters)
+        }
+        return null
+    }
+
+    private suspend fun searchCandidateIds(request: LyricsRequest): List<Long> = coroutineScope {
+        searchRequests(request)
             .map { searchRequest ->
                 async {
                     requestText(
@@ -73,11 +178,16 @@ class AppleMusicLyricsClient(
             }
             .awaitAll()
             .filterNotNull()
-
-        val candidateIds = searchResponses
             .flatMap { rankTrackIds(it, request) }
             .distinct()
             .take(MAX_LYRICS_CANDIDATES)
+    }
+
+    private suspend fun findUncached(
+        request: LyricsRequest,
+        candidates: kotlinx.coroutines.Deferred<List<Long>>,
+    ): LyricsState? = coroutineScope {
+        val candidateIds = candidates.await()
 
         // Try candidates in ranking order. Launching every duplicate at once
         // made one slow or broken regional ID cancel a valid Apple result.
@@ -325,8 +435,9 @@ class AppleMusicLyricsClient(
      * source listed first (NetEase, QQ Music, LRCLIB).
      */
     private suspend fun findFromFallbackSources(request: LyricsRequest): LyricsState? {
-        log("Lyrics: no Apple Music lyrics, trying NetEase, QQ Music and LRCLIB")
+        log("Lyrics: no Apple Music lyrics, trying LyricsPlus, NetEase, QQ Music and LRCLIB")
         val sources = listOf<Pair<String, (LyricsRequest) -> LyricsState?>>(
+            "LyricsPlus" to { findFromLyricsPlus(it, LyricsPlus.SOURCES_OTHER) },
             "NetEase" to ::findFromNetease,
             "QQ Music" to ::findFromQqMusic,
             "LRCLIB" to ::findFromLrclib,
@@ -471,7 +582,7 @@ class AppleMusicLyricsClient(
         // Whole lookup (Apple mirror first, then the fallback) and the share of
         // it the Apple mirror may use. The service-level window must be larger.
         private const val LOOKUP_TIMEOUT_MS = 46_000L
-        private const val APPLE_LOOKUP_TIMEOUT_MS = 24_000L
+        private const val APPLE_LOOKUP_TIMEOUT_MS = 26_000L
         private const val FALLBACK_TIMEOUT_MS = 20_000L
         private const val FALLBACK_CONNECT_TIMEOUT_MS = 3_000
         private const val FALLBACK_READ_TIMEOUT_MS = 5_000
@@ -492,6 +603,9 @@ class AppleMusicLyricsClient(
         private const val MAX_ALBUM_SEARCH_REQUESTS = 6
         private const val MAX_ALBUM_CANDIDATES = 3
         private const val MAX_LYRICS_CANDIDATES = 5
+        private const val TRANSLATION_TIMEOUT_MS = 25_000L
+        private const val MAX_DIRECT_CANDIDATES = 3
+        private const val MAX_LYRICSPLUS_MIRRORS = 3
         private const val MAX_LINES = 750
         private const val MAX_WORDS_PER_LINE = 160
         private val SEARCH_COUNTRIES = listOf("TH", "US")
@@ -810,6 +924,7 @@ class AppleMusicLyricsClient(
                         ?: timeMs
                     val endMs = maxOf(declaredEnd, wordEnd).takeIf { it > timeMs }
                     val agentId = rawLine.optString("agent").trim()
+                    val translation = (rawLine.opt("translation") as? String).orEmpty().trim()
                     add(
                         ParsedProviderLine(
                             line = LyricLine(
@@ -821,6 +936,7 @@ class AppleMusicLyricsClient(
                                 backgroundText = background.text,
                                 backgroundWords = backgroundWords,
                                 agentId = agentId,
+                                translation = translation,
                             ),
                             vocalTurn = ProviderVocalTurn(
                                 explicitOpposite = rawLine.optBooleanOrNull("oppositeTurn"),
@@ -1337,6 +1453,10 @@ class AppleMusicLyricsClient(
             else -> null
         }
 
+        /** True when this token is a syllable that continues into the next one. */
+        private fun JSONObject.joinsNextToken(): Boolean =
+            optBoolean("part", false) || optBoolean("isPartOfWord", false)
+
         private fun parseTextField(
             value: Any?,
             fallbackEndMs: Long?,
@@ -1379,7 +1499,7 @@ class AppleMusicLyricsClient(
                 val duration = item.optTimestampMs("duration") ?: 0L
                 if (start < 0L) return@mapIndexedNotNull null
                 val nextToken = tokens.getOrNull(index + 1)?.second
-                val separator = separatorAfter(token, nextToken)
+                val separator = if (item.joinsNextToken()) "" else separatorAfter(token, nextToken)
                 val end = when {
                     declaredEnd > start -> declaredEnd
                     duration > 0L -> start + duration
@@ -1389,8 +1509,12 @@ class AppleMusicLyricsClient(
                 }
                 LyricWord(token + separator, start, end)
             }
-            val text = tokens.mapIndexed { index, (_, token) ->
-                token + separatorAfter(token, tokens.getOrNull(index + 1)?.second)
+            val text = tokens.mapIndexed { index, (item, token) ->
+                token + if (item.joinsNextToken()) {
+                    ""
+                } else {
+                    separatorAfter(token, tokens.getOrNull(index + 1)?.second)
+                }
             }.joinToString("").trimEnd()
             return ParsedWords(text, words)
         }

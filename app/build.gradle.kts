@@ -35,13 +35,15 @@ android {
         versionName = "3.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
-            abiFilters += setOf("armeabi-v7a", "arm64-v8a", "x86_64")
+            // Android TVs/boxes are ARM; dropping x86_64 shrinks the APK by roughly a third.
+            abiFilters += setOf("armeabi-v7a", "arm64-v8a")
         }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfigs.findByName("release")?.let { signingConfig = it }
         }
@@ -68,6 +70,7 @@ android {
     }
 
     androidResources {
+        localeFilters += setOf("en", "es")
         noCompress += "tflite"
     }
 }

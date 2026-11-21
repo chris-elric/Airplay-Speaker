@@ -215,4 +215,16 @@
     <string name="debug_jitter">Jitter: %1$s</string>
     <string name="debug_audio">Audio: %1$s  Vol: %2$d%%</string>
     <string name="debug_clients">Clients: %1$d</string>
+    <string name="section_lyrics">Lyrics</string>
+    <string name="setting_apple_token">Apple Music account token</string>
+    <string name="setting_apple_token_desc">Optional but recommended. Paste the media-user-token cookie from music.apple.com (browser dev tools → Application → Cookies) to get Apple\'s word-by-word lyrics for your account. It stays on this device and is only sent to Apple. Press Done to save; clear the field to remove it.</string>
+    <string name="setting_apple_token_label">media-user-token</string>
+    <string name="setting_lyrics_translation">Translate lyrics</string>
+    <string name="setting_lyrics_translation_desc">Show a translation under each line, like the Apple Music app.</string>
+    <string name="setting_lyrics_translation_language">Translation language</string>
+    <string name="setting_lyrics_translation_language_desc">Apple\'s own translation is used when available, then Musixmatch, then Google.</string>
+    <string name="setting_lyrics_translation_language_placeholder">Language code (e.g. es)</string>
+    <string name="setting_musixmatch_token">Musixmatch token</string>
+    <string name="setting_musixmatch_token_desc">Optional personal Musixmatch user token for translations. Leave empty to use an anonymous one.</string>
+    <string name="setting_musixmatch_token_label">Musixmatch user token</string>
 </resources>

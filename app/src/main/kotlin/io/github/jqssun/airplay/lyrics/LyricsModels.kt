@@ -34,6 +34,8 @@ data class LyricLine(
     val backgroundWords: List<LyricWord> = emptyList(),
     /** Stable singer/agent identifier used to resolve duet placement. */
     val agentId: String = "",
+    /** Optional translation of [text] into the viewer's language. */
+    val translation: String = "",
 )
 
 enum class WordSyncMode {
