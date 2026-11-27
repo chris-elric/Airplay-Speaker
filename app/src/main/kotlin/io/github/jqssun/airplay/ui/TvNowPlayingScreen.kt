@@ -1370,7 +1370,7 @@ private fun FullScreenMotionArtworkBackdrop(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .motionArtworkEdgeFeather(softLayer = false),
+                    .motionArtworkEdgeFade(),
             ) {
                 LoopingMotionArtwork(
                     url = motionUrl,
@@ -1407,6 +1407,32 @@ private fun FullScreenMotionArtworkBackdrop(
                 )
         )
     }
+}
+
+/**
+ * Soft dark edges for the playing movie, drawn as plain gradients on top of
+ * it. The previous version masked the video with an offscreen DstIn layer,
+ * which re-rendered a full-pane buffer for every video frame.
+ */
+private fun Modifier.motionArtworkEdgeFade(): Modifier = drawWithContent {
+    drawContent()
+    drawRect(
+        brush = Brush.horizontalGradient(
+            0f to Color.Black.copy(alpha = 0.32f),
+            0.055f to Color.Transparent,
+            0.76f to Color.Transparent,
+            0.88f to Color.Black.copy(alpha = 0.5f),
+            1f to Color.Black,
+        ),
+    )
+    drawRect(
+        brush = Brush.verticalGradient(
+            0f to Color.Black.copy(alpha = 0.4f),
+            0.075f to Color.Transparent,
+            0.86f to Color.Transparent,
+            1f to Color.Black.copy(alpha = 0.5f),
+        ),
+    )
 }
 
 /**
@@ -2217,21 +2243,6 @@ private fun LoopingMotionArtwork(
         animationSpec = tween(420),
         label = "motionArtworkReveal",
     )
-    val presentationPhase = remember(url) { Animatable(0f) }
-    LaunchedEffect(url, playing) {
-        if (!playing) return@LaunchedEffect
-        while (isActive) {
-            val remaining = (1f - presentationPhase.value).coerceIn(0.001f, 1f)
-            presentationPhase.animateTo(
-                targetValue = 1f,
-                animationSpec = tween(
-                    durationMillis = (18_000f * remaining).roundToInt(),
-                    easing = LinearEasing,
-                ),
-            )
-            presentationPhase.snapTo(0f)
-        }
-    }
     val player = remember(url, fullScreen) {
         // Keep enough HLS data ready for a 60 fps rendition without allowing
         // decorative motion art to dominate memory on a 2 GB television.
@@ -2248,10 +2259,10 @@ private fun LoopingMotionArtwork(
         val compactTrackSelector = DefaultTrackSelector(context).apply {
             setParameters(
                 buildUponParameters()
-                    // Prefer a 50–60 fps HLS variant when the source publishes
-                    // one. If it only has 24/30 fps, Media3 safely falls back.
-                    .setMinVideoFrameRate(50)
-                    .setMaxVideoFrameRate(60)
+                    // No frame-rate window: a minimum of 50 fps used to push
+                    // the selector toward a lower-resolution 60 fps ladder
+                    // rung. The highest-resolution rendition is chosen and
+                    // the decoder runs it at its native rate.
                     .setMaxVideoSize(
                         if (fullScreen) 1920 else 1080,
                         if (fullScreen) 1920 else 1080,
@@ -2332,24 +2343,13 @@ private fun LoopingMotionArtwork(
                 },
                 modifier = modifier
                     .alpha(videoAlpha)
-                    // This tiny GPU-only drift is sampled at display VSYNC.
-                    // It keeps motion perceptually continuous at 60/120 Hz
-                    // even when the supplied movie contains only 24/30 fps.
+                    // No per-frame transform: animating the TextureView every
+                    // VSYNC forced the whole masked backdrop to be recomposited
+                    // on the GPU and dragged the movie to a few fps on TVs.
                     .graphicsLayer {
-                        val angle = presentationPhase.value * (2f * PI.toFloat())
-                        val breathe =
-                            (if (fullScreen) 0.0025f else 0.004f) * sin(angle * 0.72f)
-                        // The aspect matrix already fills the pane. Keep only
-                        // a tiny overscan so animation does not enlarge and
-                        // soften every frame unnecessarily.
-                        val baseScale = if (fullScreen) 1.008f else 1.014f
-                        scaleX = baseScale + breathe
-                        scaleY = baseScale + breathe
-                        translationX =
-                            (if (fullScreen) 2.4f else 2.6f) * density * cos(angle)
-                        translationY =
-                            (if (fullScreen) 1.9f else 2.1f) *
-                                density * sin(angle * 0.84f)
+                        val baseScale = if (fullScreen) 1.004f else 1.01f
+                        scaleX = baseScale
+                        scaleY = baseScale
                     },
             )
         }
@@ -2421,9 +2421,11 @@ private fun DisplaySyncedLyricsStage(
         viewModel = viewModel,
         enabled = lyrics.status == LyricsStatus.SYNCED && playing,
     )
+    // Positive delay shows each line earlier, compensating audio that runs ahead.
+    val lyricsDelayMs by viewModel.lyricsDelayMs.collectAsState()
     AppleStyleLyricsStage(
         lyrics = lyrics,
-        positionMs = displayPositionMs,
+        positionMs = displayPositionMs + lyricsDelayMs,
         accent = accent,
         paper = paper,
         muted = muted,
@@ -3120,10 +3122,12 @@ private fun ScrollableLyricLine(
                 }
             }
 
-            if (line.translation.isNotBlank()) {
+            // Romanization first (how it is sung), then the translation (what it means).
+            for (extra in listOf(line.romanization, line.translation)) {
+                if (extra.isBlank()) continue
                 Spacer(Modifier.height((6f * scale).dp))
                 Text(
-                    line.translation,
+                    extra,
                     color = paper.copy(alpha = if (isActive) 0.62f else 0.42f),
                     fontSize = (26f * LyricTextScale * scale).sp,
                     lineHeight = (33f * LyricTextScale * scale).sp,

@@ -16,7 +16,9 @@ import io.github.jqssun.airplay.artwork.AppleMusicArtworkClient
 import io.github.jqssun.airplay.artwork.RemoteArtworkLoader
 import io.github.jqssun.airplay.audio.DacpQueueState
 import io.github.jqssun.airplay.audio.TrackInfo
+import io.github.jqssun.airplay.lyrics.LyricsExtraMode
 import io.github.jqssun.airplay.lyrics.LyricsState
+import io.github.jqssun.airplay.lyrics.forMode
 import io.github.jqssun.airplay.renderer.AudioMeterLevels
 import io.github.jqssun.airplay.renderer.isAiVocalSeparationSupported
 import io.github.jqssun.airplay.service.AirPlayService
@@ -26,8 +28,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.File
 import kotlin.math.abs
@@ -255,10 +259,15 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     )
     val musixmatchToken: StateFlow<String> = _musixmatchToken.asStateFlow()
 
-    private val _lyricsTranslation = MutableStateFlow(
-        prefs.getBoolean(Prefs.LYRICS_TRANSLATION, Prefs.DEF_LYRICS_TRANSLATION)
+    private val _lyricsExtraMode = MutableStateFlow(Prefs.lyricsExtraMode(prefs))
+    val lyricsExtraMode: StateFlow<LyricsExtraMode> = _lyricsExtraMode.asStateFlow()
+
+    /** Positive values show lyrics earlier (use when the audio runs ahead of them). */
+    private val _lyricsDelayMs = MutableStateFlow(
+        prefs.getInt(Prefs.LYRICS_DELAY_MS, Prefs.DEF_LYRICS_DELAY_MS)
+            .coerceIn(-Prefs.LYRICS_DELAY_LIMIT_MS, Prefs.LYRICS_DELAY_LIMIT_MS)
     )
-    val lyricsTranslation: StateFlow<Boolean> = _lyricsTranslation.asStateFlow()
+    val lyricsDelayMs: StateFlow<Int> = _lyricsDelayMs.asStateFlow()
 
     private val _lyricsTranslationLanguage = MutableStateFlow(
         prefs.getString(Prefs.LYRICS_TRANSLATION_LANGUAGE, Prefs.DEF_LYRICS_TRANSLATION_LANGUAGE)
@@ -382,7 +391,10 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private var queueArtworkJob: Job? = null
 
     private val _lyrics = MutableStateFlow(LyricsState())
-    val lyrics: StateFlow<LyricsState> = _lyrics.asStateFlow()
+    /** Lyrics as the UI should show them: only the extra line(s) chosen in Settings. */
+    val lyrics: StateFlow<LyricsState> = kotlinx.coroutines.flow
+        .combine(_lyrics, _lyricsExtraMode) { state, mode -> state.forMode(mode) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, LyricsState())
 
     private val _audioPositionMs = MutableStateFlow(0L)
     val audioPositionMs: StateFlow<Long> = _audioPositionMs.asStateFlow()
@@ -607,10 +619,15 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         _musixmatchToken.value = value
         prefs.edit().putString(Prefs.MUSIXMATCH_TOKEN, value).apply()
     }
-    fun setLyricsTranslation(v: Boolean) {
-        _lyricsTranslation.value = v
-        prefs.edit().putBoolean(Prefs.LYRICS_TRANSLATION, v).apply()
+    fun setLyricsExtraMode(mode: LyricsExtraMode) {
+        _lyricsExtraMode.value = mode
+        prefs.edit().putString(Prefs.LYRICS_EXTRA_MODE, mode.key).apply()
         service?.refreshLyricTranslation()
+    }
+    fun setLyricsDelayMs(v: Int) {
+        val value = v.coerceIn(-Prefs.LYRICS_DELAY_LIMIT_MS, Prefs.LYRICS_DELAY_LIMIT_MS)
+        _lyricsDelayMs.value = value
+        prefs.edit().putInt(Prefs.LYRICS_DELAY_MS, value).apply()
     }
     fun setLyricsTranslationLanguage(v: String) {
         val value = v.trim().ifBlank { Prefs.DEF_LYRICS_TRANSLATION_LANGUAGE }

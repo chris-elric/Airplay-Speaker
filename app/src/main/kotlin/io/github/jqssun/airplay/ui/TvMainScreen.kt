@@ -78,6 +78,12 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import io.github.jqssun.airplay.lyrics.LyricsExtraMode
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -781,7 +787,8 @@ private fun TvSettingsPanel(
     val advertiseVideo by viewModel.advertiseVideo.collectAsState()
     val motionArtworkEnabled by viewModel.motionArtworkEnabled.collectAsState()
     val fullscreenMotionArtwork by viewModel.fullscreenMotionArtwork.collectAsState()
-    val lyricsTranslation by viewModel.lyricsTranslation.collectAsState()
+    val lyricsExtraMode by viewModel.lyricsExtraMode.collectAsState()
+    val lyricsDelayMs by viewModel.lyricsDelayMs.collectAsState()
     val translationLanguage by viewModel.lyricsTranslationLanguage.collectAsState()
     val appleToken by viewModel.appleMediaUserToken.collectAsState()
     val musixmatchToken by viewModel.musixmatchToken.collectAsState()
@@ -867,11 +874,36 @@ private fun TvSettingsPanel(
                 )
             }
             item {
-                TvSettingCard(
-                    stringResource(R.string.setting_lyrics_translation),
-                    stringResource(R.string.setting_lyrics_translation_desc),
-                    lyricsTranslation,
-                    viewModel::setLyricsTranslation,
+                TvValueCard(
+                    title = stringResource(R.string.setting_lyrics_extra),
+                    description = stringResource(R.string.setting_lyrics_extra_desc),
+                    value = stringResource(
+                        when (lyricsExtraMode) {
+                            LyricsExtraMode.OFF -> R.string.lyrics_extra_off
+                            LyricsExtraMode.TRANSLATION -> R.string.lyrics_extra_translation
+                            LyricsExtraMode.ROMANIZATION -> R.string.lyrics_extra_romanization
+                            LyricsExtraMode.BOTH -> R.string.lyrics_extra_both
+                        }
+                    ),
+                    highlighted = lyricsExtraMode != LyricsExtraMode.OFF,
+                    onClick = { viewModel.setLyricsExtraMode(lyricsExtraMode.next()) },
+                )
+            }
+            item {
+                TvValueCard(
+                    title = stringResource(R.string.setting_lyrics_delay),
+                    description = stringResource(R.string.setting_lyrics_delay_desc),
+                    value = formatLyricDelay(lyricsDelayMs),
+                    highlighted = lyricsDelayMs != 0,
+                    onClick = {
+                        // OK cycles coarse presets; LEFT/RIGHT fine-tune by 50 ms.
+                        val presets = listOf(0, 250, 500, 750, 1000, 1500, 2000, -250, -500, -1000)
+                        val next = presets.indexOf(lyricsDelayMs).let { i ->
+                            if (i < 0) 0 else presets[(i + 1) % presets.size]
+                        }
+                        viewModel.setLyricsDelayMs(next)
+                    },
+                    onAdjust = { direction -> viewModel.setLyricsDelayMs(lyricsDelayMs + direction * 50) },
                 )
             }
             item {
@@ -1023,6 +1055,8 @@ private fun TvValueCard(
     value: String,
     onClick: () -> Unit,
     highlighted: Boolean = false,
+    /** When set, LEFT/RIGHT call this with -1/+1 instead of moving focus. */
+    onAdjust: ((Int) -> Unit)? = null,
 ) {
     var focused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (focused) 1.025f else 1f, label = "tvValueScale")
@@ -1039,6 +1073,16 @@ private fun TvValueCard(
                 strength = 0.84f,
             )
             .onFocusChanged { focused = it.isFocused }
+            .onPreviewKeyEvent { event ->
+                val adjust = onAdjust
+                if (adjust == null || event.type != KeyEventType.KeyDown) {
+                    false
+                } else when (event.key) {
+                    Key.DirectionLeft -> { adjust(-1); true }
+                    Key.DirectionRight -> { adjust(1); true }
+                    else -> false
+                }
+            }
             .clickable(role = Role.Button, onClick = onClick)
             .focusable()
             .padding(horizontal = 24.dp, vertical = 18.dp),
@@ -1069,6 +1113,12 @@ private fun TvValueCard(
             maxLines = 1,
         )
     }
+}
+
+/** "+0.50 s" / "-1.00 s" / "0 s". */
+internal fun formatLyricDelay(ms: Int): String = when {
+    ms == 0 -> "0 s"
+    else -> String.format(java.util.Locale.US, "%+.2f s", ms / 1000f)
 }
 
 @Composable

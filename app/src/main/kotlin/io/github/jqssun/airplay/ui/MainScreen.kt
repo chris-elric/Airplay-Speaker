@@ -1057,7 +1057,7 @@ internal fun NowPlayingContent(
 
                     SyncedLyricsCard(
                         lyrics = lyrics,
-                        positionMs = audioPositionMs,
+                        positionMs = audioPositionMs + viewModel.lyricsDelayMs.collectAsState().value,
                         mint = mint,
                         paper = paper,
                         muted = muted,

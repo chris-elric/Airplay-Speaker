@@ -48,11 +48,22 @@ internal object AppleTtml {
      * @param targetLanguage when the TTML already carries a translation in this
      * language (for example "es"), it is attached to each line.
      */
-    fun convert(ttml: String, targetLanguage: String = ""): Result? {
+    fun convert(
+        ttml: String,
+        targetLanguage: String = "",
+        /** Extra TTML documents (Apple's `ttmlLocalizations`) carrying translations/transliterations. */
+        localizations: List<String> = emptyList(),
+    ): Result? {
         val document = parseDocument(ttml) ?: return null
         val root = document.documentElement ?: return null
 
-        val translations = readTranslations(root, targetLanguage)
+        val translations = HashMap(readTranslations(root, targetLanguage))
+        val romanizations = HashMap(readRomanizations(root))
+        for (extra in localizations) {
+            val extraRoot = parseDocument(extra)?.documentElement ?: continue
+            readTranslations(extraRoot, targetLanguage).forEach { (k, v) -> translations.putIfAbsent(k, v) }
+            readRomanizations(extraRoot).forEach { (k, v) -> romanizations.putIfAbsent(k, v) }
+        }
         val lines = JSONArray()
         var wordTimed = false
         val paragraphs = elementsNamed(root, "p")
@@ -76,6 +87,7 @@ internal object AppleTtml {
             if (end != null) line.put("endtime", end)
             if (agent.isNotBlank()) line.put("agent", agent)
             translations[key]?.let { line.put("translation", it) }
+            romanizations[key]?.let { line.put("romanization", it) }
 
             if (mainTimed) {
                 wordTimed = true
@@ -198,11 +210,50 @@ internal object AppleTtml {
             if (language != wanted) continue
             for (text in elementsNamed(translation, "text")) {
                 val key = text.getAttribute("for")
-                val value = text.textContent.orEmpty().trim()
+                val value = plainText(text)
                 if (key.isNotEmpty() && value.isNotEmpty()) result[key] = value
             }
         }
         return result
+    }
+
+    /**
+     * key ("L1") -> romanized line, from `<transliteration>` blocks. Word-level
+     * spans are flattened to one string; backing vocals are left out.
+     */
+    private fun readRomanizations(root: Element): Map<String, String> {
+        val result = HashMap<String, String>()
+        // Latin-script blocks first ("ja-Latn"), so they win over any other script.
+        val blocks = elementsNamed(root, "transliteration")
+            .sortedByDescending { it.getAttribute("xml:lang").contains("Latn", ignoreCase = true) }
+        for (block in blocks) {
+            for (text in elementsNamed(block, "text")) {
+                val key = text.getAttribute("for")
+                val value = plainText(text)
+                if (key.isNotEmpty() && value.isNotEmpty()) result.putIfAbsent(key, value)
+            }
+        }
+        return result
+    }
+
+    /** Text of [element] without `x-bg` (backing vocal) spans, whitespace collapsed. */
+    private fun plainText(element: Element): String {
+        val out = StringBuilder()
+        fun walk(node: Node) {
+            val children = node.childNodes
+            for (index in 0 until children.length) {
+                val child = children.item(index)
+                when (child.nodeType) {
+                    Node.TEXT_NODE, Node.CDATA_SECTION_NODE -> out.append(child.nodeValue.orEmpty())
+                    Node.ELEMENT_NODE -> {
+                        val childElement = child as Element
+                        if (childElement.getAttribute("ttm:role") != "x-bg") walk(childElement)
+                    }
+                }
+            }
+        }
+        walk(element)
+        return out.toString().replace(Regex("\\s+"), " ").trim()
     }
 
     private fun readSongwriters(root: Element): String = elementsNamed(root, "songwriter")

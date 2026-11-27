@@ -33,24 +33,45 @@ class AppleMusicLyricsClient(
     private val http = LyricsHttp(log, USER_AGENT)
     private val appleDirect = AppleMusicDirectClient(http, log)
     private val translator = LyricsTranslator(http, log)
+    private val romanizer = Romanizer()
 
     /**
-     * Adds a per-line translation (target language from Settings) to [state].
-     * Returns [state] untouched when translation is off, already present, or
-     * no source could translate it.
+     * Fills in the per-line translation and/or romanization chosen in Settings
+     * when the lyrics did not already carry Apple's own. Translation order:
+     * Apple (already in the lines) -> Musixmatch -> Google. Romanization falls
+     * back to on-device ICU. Returns [state] itself when nothing was added.
      */
-    suspend fun withTranslation(state: LyricsState, request: LyricsRequest): LyricsState =
+    suspend fun withLyricExtras(state: LyricsState, request: LyricsRequest): LyricsState =
         withContext(Dispatchers.IO) {
             val config = settings()
-            if (!config.translationEnabled || state.lines.isEmpty()) return@withContext state
-            val translated = withTimeoutOrNull(TRANSLATION_TIMEOUT_MS) {
-                runCatching {
-                    translator.translate(state.lines, request, config.translationLanguage, config.musixmatchToken)
-                }.getOrNull()
-            } ?: return@withContext state
-            state.copy(lines = state.lines.mapIndexed { index, line ->
-                translated.getOrNull(index)?.takeIf { it.isNotBlank() }?.let { line.copy(translation = it) } ?: line
-            })
+            if (state.lines.isEmpty()) return@withContext state
+            var lines = state.lines
+
+            // Apple's own translation/romanization (already in the lines when the
+            // Apple account route was used) always wins; only gaps are filled.
+            if (config.translationEnabled && lines.none { it.translation.isNotBlank() }) {
+                val translated = withTimeoutOrNull(TRANSLATION_TIMEOUT_MS) {
+                    runCatching {
+                        translator.translate(lines, request, config.translationLanguage, config.musixmatchToken)
+                    }.getOrNull()
+                }
+                if (translated != null) {
+                    lines = lines.mapIndexed { index, line ->
+                        translated.getOrNull(index)?.takeIf { it.isNotBlank() }
+                            ?.let { line.copy(translation = it) } ?: line
+                    }
+                }
+            }
+            if (config.romanizationEnabled && lines.none { it.romanization.isNotBlank() }) {
+                val romanized = runCatching { romanizer.romanize(lines) }.getOrNull()
+                if (romanized != null) {
+                    lines = lines.mapIndexed { index, line ->
+                        romanized.getOrNull(index)?.takeIf { it.isNotBlank() }
+                            ?.let { line.copy(romanization = it) } ?: line
+                    }
+                }
+            }
+            if (lines === state.lines) state else state.copy(lines = lines)
         }
 
     private val cache = object : LinkedHashMap<String, LyricsState>(16, 0.75f, true) {
@@ -99,6 +120,7 @@ class AppleMusicLyricsClient(
         val config = settings()
         val candidates = async(Dispatchers.IO) { searchCandidateIds(request) }
         val language = if (config.translationEnabled) config.translationLanguage else ""
+        val wantRomanization = config.romanizationEnabled
 
         val direct = async(Dispatchers.IO) {
             if (AppleMusicDirectClient.normalizeUserToken(config.appleMediaUserToken).isEmpty()) {
@@ -108,7 +130,7 @@ class AppleMusicLyricsClient(
             runCatching {
                 val ids = candidates.await().take(MAX_DIRECT_CANDIDATES)
                 resolveFirstCandidate(ids) { id ->
-                    appleDirect.fetch(id, config.appleMediaUserToken, language)
+                    appleDirect.fetch(id, config.appleMediaUserToken, language, wantRomanization)
                 }?.second
             }.onFailure { log("Lyrics: Apple Music account lookup failed (${it.javaClass.simpleName})") }
                 .getOrNull()
@@ -933,6 +955,7 @@ class AppleMusicLyricsClient(
                     val endMs = maxOf(declaredEnd, wordEnd).takeIf { it > timeMs }
                     val agentId = rawLine.optString("agent").trim()
                     val translation = (rawLine.opt("translation") as? String).orEmpty().trim()
+                    val romanization = (rawLine.opt("romanization") as? String).orEmpty().trim()
                     add(
                         ParsedProviderLine(
                             line = LyricLine(
@@ -945,6 +968,7 @@ class AppleMusicLyricsClient(
                                 backgroundWords = backgroundWords,
                                 agentId = agentId,
                                 translation = translation,
+                                romanization = romanization,
                             ),
                             vocalTurn = ProviderVocalTurn(
                                 explicitOpposite = rawLine.optBooleanOrNull("oppositeTurn"),

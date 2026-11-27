@@ -175,7 +175,7 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
             LyricsSettings(
                 appleMediaUserToken = prefs.getString(Prefs.APPLE_MEDIA_USER_TOKEN, Prefs.DEF_APPLE_MEDIA_USER_TOKEN).orEmpty(),
                 musixmatchToken = prefs.getString(Prefs.MUSIXMATCH_TOKEN, Prefs.DEF_MUSIXMATCH_TOKEN).orEmpty(),
-                translationEnabled = prefs.getBoolean(Prefs.LYRICS_TRANSLATION, Prefs.DEF_LYRICS_TRANSLATION),
+                extraMode = Prefs.lyricsExtraMode(prefs),
                 translationLanguage = prefs.getString(Prefs.LYRICS_TRANSLATION_LANGUAGE, Prefs.DEF_LYRICS_TRANSLATION_LANGUAGE)
                     .orEmpty().ifBlank { Prefs.DEF_LYRICS_TRANSLATION_LANGUAGE },
             )
@@ -1117,7 +1117,7 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
             }
             // Translation arrives a moment later so the original lyrics never wait for it.
             if (finalResult.lines.isNotEmpty()) {
-                val translated = appleMusicLyricsClient.withTranslation(finalResult, request)
+                val translated = appleMusicLyricsClient.withLyricExtras(finalResult, request)
                 if (translated !== finalResult) {
                     synchronized(this@AirPlayService) {
                         if (lyricsKey == key) _lyrics.value = translated
@@ -1127,19 +1127,20 @@ class AirPlayService : Service(), RaopCallbackHandler, ClassicRaopCallbackHandle
         }
     }
 
-    /** Called when the translation setting changes, so the current song updates immediately. */
+    /** Called when the translation/romanization setting changes, so the current song updates immediately. */
     fun refreshLyricTranslation() {
         val request = lastLyricsRequest ?: return
         val key = lyricsKey
         val current = _lyrics.value
         if (current.lines.isEmpty()) return
         serviceScope.launch(Dispatchers.Default) {
-            val prefs = getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
-            val enabled = prefs.getBoolean(Prefs.LYRICS_TRANSLATION, Prefs.DEF_LYRICS_TRANSLATION)
-            val base = if (enabled) current else current.copy(lines = current.lines.map { it.copy(translation = "") })
-            val updated = if (enabled) appleMusicLyricsClient.withTranslation(base.copy(lines = base.lines.map { it.copy(translation = "") }), request) else base
-            synchronized(this@AirPlayService) {
-                if (lyricsKey == key) _lyrics.value = updated
+            // The UI filters what it shows by mode, so extras already present
+            // are kept; only missing ones are fetched for the new mode.
+            val updated = appleMusicLyricsClient.withLyricExtras(current, request)
+            if (updated !== current) {
+                synchronized(this@AirPlayService) {
+                    if (lyricsKey == key) _lyrics.value = updated
+                }
             }
         }
     }

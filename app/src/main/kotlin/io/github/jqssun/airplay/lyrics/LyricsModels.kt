@@ -36,6 +36,8 @@ data class LyricLine(
     val agentId: String = "",
     /** Optional translation of [text] into the viewer's language. */
     val translation: String = "",
+    /** Optional romanization (pinyin, romaji, ...) of [text]. */
+    val romanization: String = "",
 )
 
 enum class WordSyncMode {
@@ -65,6 +67,26 @@ data class LyricsState(
     val sourceId: Long? = null,
     val wordSyncMode: WordSyncMode = WordSyncMode.NONE,
 )
+
+/**
+ * What to show under each lyric, as chosen in Settings. The state keeps every
+ * extra it has; this only decides what the UI receives.
+ */
+fun LyricsState.forMode(mode: LyricsExtraMode): LyricsState {
+    val keepTranslation = mode.wantsTranslation
+    val keepRomanization = mode.wantsRomanization
+    val needsChange = lines.any {
+        (!keepTranslation && it.translation.isNotEmpty()) ||
+            (!keepRomanization && it.romanization.isNotEmpty())
+    }
+    if (!needsChange) return this
+    return copy(lines = lines.map {
+        it.copy(
+            translation = if (keepTranslation) it.translation else "",
+            romanization = if (keepRomanization) it.romanization else "",
+        )
+    })
+}
 
 data class LyricsRequest(
     val title: String,

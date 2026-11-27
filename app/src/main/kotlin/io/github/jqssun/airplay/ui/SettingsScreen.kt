@@ -22,6 +22,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import io.github.jqssun.airplay.lyrics.LyricsExtraMode
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -71,7 +72,8 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val audioBufferMultiplier by viewModel.audioBufferMultiplier.collectAsState()
     val appleMediaUserToken by viewModel.appleMediaUserToken.collectAsState()
     val musixmatchToken by viewModel.musixmatchToken.collectAsState()
-    val lyricsTranslation by viewModel.lyricsTranslation.collectAsState()
+    val lyricsExtraMode by viewModel.lyricsExtraMode.collectAsState()
+    val lyricsDelayMs by viewModel.lyricsDelayMs.collectAsState()
     val lyricsTranslationLanguage by viewModel.lyricsTranslationLanguage.collectAsState()
 
     Column(
@@ -253,11 +255,30 @@ fun SettingsScreen(viewModel: MainViewModel) {
             onSave = { viewModel.setAppleMediaUserToken(it) }
         )
 
-        SettingSwitch(
-            title = stringResource(R.string.setting_lyrics_translation),
-            description = stringResource(R.string.setting_lyrics_translation_desc),
-            checked = lyricsTranslation,
-            onCheckedChange = { viewModel.setLyricsTranslation(it) }
+        SettingChoice(
+            title = stringResource(R.string.setting_lyrics_extra),
+            description = stringResource(R.string.setting_lyrics_extra_desc),
+            options = listOf(
+                LyricsExtraMode.OFF to stringResource(R.string.lyrics_extra_off),
+                LyricsExtraMode.TRANSLATION to stringResource(R.string.lyrics_extra_translation),
+                LyricsExtraMode.ROMANIZATION to stringResource(R.string.lyrics_extra_romanization),
+                LyricsExtraMode.BOTH to stringResource(R.string.lyrics_extra_both),
+            ),
+            selected = lyricsExtraMode,
+            onSelect = { viewModel.setLyricsExtraMode(it) }
+        )
+
+        SettingChipField(
+            title = stringResource(R.string.setting_lyrics_delay),
+            description = stringResource(R.string.setting_lyrics_delay_desc),
+            value = lyricsDelayMs.toString(),
+            presets = listOf(
+                "0" to "0 s", "250" to "+0.25 s", "500" to "+0.5 s", "1000" to "+1 s",
+                "-250" to "-0.25 s", "-500" to "-0.5 s",
+            ),
+            placeholder = stringResource(R.string.setting_lyrics_delay_placeholder),
+            keyboard = KeyboardType.Number,
+            onValueChange = { it.toIntOrNull()?.let { v -> viewModel.setLyricsDelayMs(v) } }
         )
 
         SettingChipField(
@@ -648,6 +669,36 @@ private fun SettingChipField(
                         }),
                         modifier = Modifier.fillMaxWidth()
                     )
+                }
+            }
+        }
+    )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun <T> SettingChoice(
+    title: String,
+    description: String,
+    options: List<Pair<T, String>>,
+    selected: T,
+    onSelect: (T) -> Unit,
+) {
+    ListItem(
+        headlineContent = { Text(title) },
+        supportingContent = {
+            Column {
+                Text(description)
+                Spacer(Modifier.height(8.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    options.forEach { (value, label) ->
+                        FilterChip(
+                            selected = value == selected,
+                            onClick = { onSelect(value) },
+                            label = { Text(label) },
+                            modifier = Modifier.dpadFocus()
+                        )
+                    }
                 }
             }
         }

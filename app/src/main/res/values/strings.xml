@@ -231,4 +231,13 @@
     <string name="lyrics_token_not_set">Not set</string>
     <string name="btn_save_token">Save</string>
     <string name="btn_cancel_token">Cancel</string>
+    <string name="setting_lyrics_extra">Extra line under lyrics</string>
+    <string name="setting_lyrics_extra_desc">Show a translation, a romanization (pinyin, romaji…) or both under each lyric. Apple\'s own is used first when available.</string>
+    <string name="lyrics_extra_off">Off</string>
+    <string name="lyrics_extra_translation">Translation</string>
+    <string name="lyrics_extra_romanization">Romanization</string>
+    <string name="lyrics_extra_both">Both</string>
+    <string name="setting_lyrics_delay">Lyrics delay</string>
+    <string name="setting_lyrics_delay_desc">Positive values show each line earlier (use it when the audio is ahead of the lyrics); negative values show it later. OK cycles presets, left/right fine-tunes by 0.05 s.</string>
+    <string name="setting_lyrics_delay_placeholder">Milliseconds (e.g. 500)</string>
 </resources>

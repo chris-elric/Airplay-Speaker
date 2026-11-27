@@ -1,0 +1,245 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Airplay Speaker</string>
+
+    <!-- Notification -->
+    <string name="notification_channel">Airplay Speaker</string>
+    <string name="notification_title">Airplay Speaker está listo</string>
+    <string name="notification_text">Esperando audio AirPlay con calidad de CD</string>
+    <string name="notification_pin_title">Se requiere PIN de AirPlay</string>
+    <string name="notification_pin_text">PIN: %1$s</string>
+    <string name="stop_service">Detener</string>
+
+    <!-- Tabs -->
+    <string name="tab_overview">Resumen</string>
+    <string name="tab_logs">Registros</string>
+    <string name="tab_settings">Ajustes</string>
+
+    <!-- TV navigation and ten-foot UI -->
+    <string name="tv_nav_home">Inicio</string>
+    <string name="tv_nav_settings">Ajustes</string>
+    <string name="tv_back">Atrás</string>
+    <string name="setting_airplay_receiver">Receptor AirPlay</string>
+    <string name="setting_airplay_receiver_desc">Hacer que esta TV esté disponible para conexiones AirPlay</string>
+    <string name="tv_nav_diagnostics">Diagnóstico</string>
+    <string name="tv_receiver_label">RECEPTOR DE TV</string>
+    <string name="tv_receiver_ready">Receptor listo</string>
+    <string name="tv_receiver_offline">Receptor sin conexión</string>
+    <string name="tv_cd_quality">CALIDAD CD</string>
+    <string name="tv_home_title">Airplay Speaker</string>
+    <string name="tv_home_subtitle">Música sin pérdida, portadas y letras sincronizadas en la pantalla grande</string>
+    <string name="tv_listening">ESPERANDO AIRPLAY</string>
+    <string name="tv_receiver_stopped">RECEPTOR DETENIDO</string>
+    <string name="tv_connected_waiting">Conectado — esperando a que comience la música</string>
+    <string name="tv_ready_description">Listo como bocina AirPlay de música dedicada</string>
+    <string name="tv_background_chip">LISTO EN SEGUNDO PLANO</string>
+    <string name="tv_quick_connect">Conexión rápida</string>
+    <string name="tv_connect_step_1">Conecta tu dispositivo Apple y la TV a la misma red</string>
+    <string name="tv_connect_step_2">En Música o en el Centro de control, elige “%1$s”</string>
+    <string name="tv_connect_step_3">Reproduce música: la portada y la letra aparecen automáticamente</string>
+    <string name="tv_speaker_mode_note">El modo de bocina compatible con Música de macOS está activo</string>
+    <string name="tv_settings_title">Ajustes de la TV</string>
+    <string name="tv_settings_subtitle">Usa el control remoto para cambiar las opciones esenciales del receptor</string>
+    <string name="tv_diagnostics_title">Diagnóstico</string>
+    <string name="tv_diagnostics_subtitle">Actividad de conexión del receptor AirPlay</string>
+    <string name="tv_no_diagnostics">Aún no hay actividad del receptor</string>
+
+    <!-- Overview -->
+    <string name="server_stopped">Servidor detenido</string>
+    <string name="waiting_for_connection">Esperando conexión...</string>
+    <string name="waiting_for_playback">Presiona reproducir en el dispositivo emisor...</string>
+    <string name="error_starting_server">Error al iniciar el servidor</string>
+    <string name="connected_count">%d conectado(s)</string>
+    <string name="error_label">Error</string>
+    <string name="stopped_label">Detenido</string>
+    <string name="btn_start">Iniciar</string>
+    <string name="btn_stop">Detener</string>
+    <string name="unknown_track">Desconocido</string>
+    <string name="lyrics_title">LETRA SINCRONIZADA</string>
+    <string name="lyrics_source">APPLE MUSIC</string>
+    <string name="lyrics_searching">Buscando letra sincronizada…</string>
+    <string name="lyrics_waiting">Esperando los datos de la canción…</string>
+    <string name="lyrics_not_found">No se encontró letra sincronizada para esta canción</string>
+    <string name="lyrics_error">La letra no está disponible por el momento</string>
+    <string name="lyrics_instrumental">Canción instrumental</string>
+    <string name="lyrics_word_sync_exact">SINCRONÍA PALABRA POR PALABRA · PRECISA</string>
+    <string name="lyrics_line_sync">LETRA · APPLE MUSIC</string>
+
+    <!-- Content descriptions -->
+    <string name="cd_pip">Imagen en imagen</string>
+    <string name="cd_fullscreen">Pantalla completa</string>
+    <string name="cd_exit_fullscreen">Salir de pantalla completa</string>
+    <string name="cd_cover_art">Portada</string>
+    <string name="cd_play_pause">Reproducir/Pausar</string>
+    <string name="cd_rewind">Retroceder</string>
+    <string name="cd_fast_forward">Adelantar</string>
+    <string name="cd_volume_down">Bajar volumen</string>
+    <string name="cd_volume_up">Subir volumen</string>
+    <string name="cd_mute">Silenciar</string>
+    <string name="cd_download">Descargar video</string>
+    <string name="cd_cancel_download">Cancelar descarga</string>
+
+    <!-- Video download -->
+    <string name="download_saved">Guardado en %1$s</string>
+    <string name="download_failed">Falló la descarga</string>
+
+    <!-- Player gestures -->
+    <string name="gesture_seek_seconds">%1$d segundos</string>
+    <string name="seconds_short">%1$ds</string>
+    <string name="select_playback_speed">Velocidad de reproducción</string>
+    <string name="cd_reset_speed">Restablecer velocidad</string>
+    <string name="skip_silence">Omitir silencios</string>
+
+    <!-- Player controls -->
+    <string name="cd_back">Atrás</string>
+    <string name="cd_copy_url">Copiar URL del video</string>
+    <string name="cd_rotate">Girar pantalla</string>
+    <string name="cd_lock_controls">Bloquear controles</string>
+    <string name="cd_unlock_controls">Desbloquear controles</string>
+    <string name="scale_best_fit">Mejor ajuste</string>
+    <string name="scale_stretch">Estirar</string>
+    <string name="scale_crop">Recortar</string>
+    <string name="scale_hundred_percent">100%</string>
+
+    <!-- Dialogs -->
+    <string name="dialog_pin_title">PIN de AirPlay</string>
+    <string name="btn_ok">Aceptar</string>
+
+    <!-- Logs screen -->
+    <string name="btn_export">Exportar</string>
+    <string name="btn_clear">Borrar</string>
+    <string name="export_logs_chooser_title">Exportar registros</string>
+
+    <!-- Settings sections -->
+    <string name="section_server">Servidor</string>
+    <string name="section_connection">Conexión</string>
+    <string name="section_display">Pantalla</string>
+    <string name="section_decode">Decodificación</string>
+    <string name="section_developer">Desarrollador</string>
+
+    <!-- Settings: Server -->
+    <string name="setting_server_name">Nombre del servidor</string>
+    <string name="setting_server_port">Puerto del servidor</string>
+    <string name="setting_auto_start">Iniciar el servidor automáticamente</string>
+    <string name="setting_auto_start_desc">Inicia el servidor AirPlay al abrir la app</string>
+    <string name="setting_boot_auto_start">Iniciar el servidor al encender</string>
+    <string name="setting_boot_auto_start_desc">Inicia el servidor AirPlay cuando se enciende el dispositivo</string>
+    <string name="setting_run_in_background">Ejecutar en segundo plano</string>
+    <string name="setting_run_in_background_desc">Mantiene el audio AirPlay sonando y el receptor disponible al salir de la app</string>
+    <string name="btn_save">Guardar</string>
+
+    <!-- Settings: Connection -->
+    <string name="setting_require_pin">Requerir PIN (Beta)</string>
+    <string name="setting_require_pin_desc">Pide un PIN de 4 dígitos en cada conexión nueva</string>
+    <string name="setting_allow_new_conn">Permitir conexiones nuevas</string>
+    <string name="setting_allow_new_conn_desc">Desconecta al cliente actual cuando se conecta uno nuevo</string>
+
+    <!-- Settings: Display -->
+    <string name="setting_idle_preview">Vista previa en pantalla inactiva</string>
+    <string name="setting_idle_preview_desc">Muestra la superficie de video mientras se espera una conexión</string>
+    <string name="setting_motion_artwork">Portada de álbum animada</string>
+    <string name="setting_motion_artwork_desc">Activa las portadas en movimiento y los efectos de álbum cuando estén disponibles</string>
+    <string name="setting_fullscreen_motion_artwork">Portada animada a pantalla completa</string>
+    <string name="setting_fullscreen_motion_artwork_desc">Llena el fondo del reproductor con la portada animada; desactívalo para conservar la portada animada clásica</string>
+    <string name="setting_auto_fullscreen">Entrar a pantalla completa automáticamente</string>
+    <string name="setting_auto_fullscreen_desc">Entra a pantalla completa cuando se conecta un cliente</string>
+    <string name="setting_keep_screen_on">Mantener la pantalla encendida</string>
+    <string name="setting_keep_screen_on_desc">Evita que se apague la pantalla mientras hay un cliente conectado</string>
+    <string name="setting_advertise_video">Anunciar compatibilidad con video AirPlay</string>
+    <string name="setting_advertise_video_desc">Si está desactivado, se usa la bocina dedicada compatible con Música de macOS</string>
+    <string name="setting_advertise_audio">Anunciar compatibilidad con audio AirPlay</string>
+    <string name="setting_advertise_audio_desc">Si está desactivado, el dispositivo solo se podrá usar para duplicar pantalla y se ocultará en los reproductores multimedia</string>
+    <string name="setting_launch_on_connect">Abrir esta aplicación al conectar</string>
+    <string name="setting_launch_on_connect_desc">Muestra la pantalla cuando se conecta un cliente</string>
+    <string name="setting_launch_on_connect_no_permission">Toca para conceder el permiso de mostrar sobre otras apps</string>
+    <string name="setting_resolution">Resolución</string>
+    <string name="setting_resolution_desc">Resolución de video que se anuncia a los clientes</string>
+    <string name="setting_resolution_placeholder">[Ancho]x[Alto]</string>
+    <string name="setting_resolution_auto">Automática</string>
+    <string name="setting_resolution_width">Ancho</string>
+    <string name="setting_resolution_height">Alto</string>
+    <string name="setting_max_fps">FPS máximos</string>
+    <string name="setting_max_fps_desc">Velocidad de fotogramas máxima que se anuncia a los clientes</string>
+    <string name="setting_max_fps_placeholder">FPS</string>
+    <string name="setting_overscanned">Con sobrebarrido</string>
+    <string name="setting_overscanned_desc">Agrega un margen de píxeles para pantallas con sobrebarrido</string>
+    <string name="chip_custom">Personalizado</string>
+
+    <!-- Settings: Decode -->
+    <string name="setting_h265">H.265 (HEVC)</string>
+    <string name="setting_h265_desc">Activa la decodificación de video H.265 si el dispositivo la admite</string>
+    <string name="setting_enforce_sdr">MediaFormat.KEY_COLOR_TRANSFER</string>
+    <string name="setting_enforce_sdr_desc">Marca el video como SDR limitado; desactívalo para permitir el paso de fuentes HDR</string>
+    <string name="setting_alac">Audio ALAC</string>
+    <string name="setting_alac_desc">Códec ALAC para la transmisión de música por AirPlay</string>
+    <string name="setting_lossless_output">Salida PCM sin pérdida</string>
+    <string name="setting_lossless_output_desc">Mantiene el ALAC decodificado con ganancia unitaria, sin escalar el volumen dentro de la app. Usa el volumen de la TV o del receptor.</string>
+    <string name="setting_spatial_enhancement">Mejora espacial / envolvente</string>
+    <string name="setting_spatial_enhancement_desc">Amplía el sonido estéreo con un procesamiento ligero dentro de la app. No es Dolby Atmos.</string>
+    <string name="setting_karaoke_mode">Karaoke inteligente / Enfoque vocal</string>
+    <string name="setting_karaoke_mode_desc">Detecta y reduce la voz principal centrada en el estéreo, protegiendo los graves, el ambiente estéreo, el detalle agudo y los ataques marcados de los instrumentos. Presiona OK en la pantalla de letras para ajustar el nivel de la voz.</string>
+    <string name="setting_ai_vocal_separation">Separación vocal con IA (Experimental)</string>
+    <string name="setting_ai_vocal_separation_desc">Usa un modelo UVR MDX-Net en el dispositivo para aislar la pista vocal real. Agrega unos 6–10 segundos de latencia y regresa automáticamente al Enfoque vocal inteligente si esta TV no puede con la carga.</string>
+    <string name="setting_ai_vocal_separation_unsupported_desc">Esta TV de 32 bits no puede ejecutar UVR MDX-Net en tiempo real. El Enfoque vocal inteligente sigue disponible sin IA.</string>
+    <string name="setting_sw_alac">Decodificador ALAC por software</string>
+    <string name="setting_sw_alac_desc">Usa el decodificador integrado si el ALAC de la plataforma no está disponible</string>
+    <string name="setting_aac">Audio AAC</string>
+    <string name="setting_aac_desc">Códec AAC-ELD o AAC-LC para el audio de la duplicación de pantalla</string>
+
+    <!-- Settings: Developer -->
+    <string name="setting_developer_options">Opciones de desarrollador</string>
+    <string name="setting_developer_options_desc">Muestra opciones para usuarios avanzados</string>
+    <string name="setting_key_allow_frame_drop">MediaFormat.KEY_ALLOW_FRAME_DROP</string>
+    <string name="setting_key_allow_frame_drop_desc">Permite que los decodificadores de video descarten fotogramas internamente para mantener el ritmo en Android 10+</string>
+    <string name="setting_realtime_decoder_priority">MediaFormat.KEY_PRIORITY</string>
+    <string name="setting_realtime_decoder_priority_desc">Solicita programación en tiempo real para los decodificadores de audio y video</string>
+    <string name="setting_operating_rate_hint">MediaFormat.KEY_OPERATING_RATE</string>
+    <string name="setting_operating_rate_hint_desc">Solicita la tasa de operación máxima para el decodificador de video</string>
+    <string name="setting_scheduled_output_buffer_release">Sincronización alineada de fotogramas</string>
+    <string name="setting_scheduled_output_buffer_release_desc">Programa cada fotograma decodificado para el VSYNC que coincide con su marca de tiempo de presentación</string>
+    <string name="setting_audio_delay">Reemplazar el retraso de audio</string>
+    <string name="setting_audio_delay_desc">Define una latencia de audio personalizada que se informa al cliente</string>
+    <string name="audio_delay_value">%dms</string>
+    <string name="setting_audio_buffer_multiplier">Tamaño del búfer de audio</string>
+    <string name="setting_audio_buffer_multiplier_desc">Multiplicador del tamaño del búfer de AudioTrack</string>
+    <string name="setting_audio_buffer_multiplier_value">%dx</string>
+    <string name="setting_debug_overlay">Mostrar superposición de depuración</string>
+    <string name="setting_debug_overlay_desc">Superpone estadísticas de la transmisión sobre el video: códec, FPS, tasa de bits, jitter, fotogramas y descartes</string>
+    <string name="setting_benchmark_log">Activar registro de depuración</string>
+    <string name="setting_benchmark_log_desc">Registra estadísticas de la transmisión en logcat: códec, FPS, tasa de bits, jitter, fotogramas y descartes</string>
+
+    <!-- Debug overlay -->
+    <string name="debug_video">Video: %1$s %2$s</string>
+    <string name="debug_fps_bitrate">FPS: %1$d  Tasa de bits: %2$s</string>
+    <string name="debug_frames_drops">Fotogramas: %1$d  Descartes: %2$d</string>
+    <string name="debug_jitter">Jitter: %1$s</string>
+    <string name="debug_audio">Audio: %1$s  Vol: %2$d%%</string>
+    <string name="debug_clients">Clientes: %1$d</string>
+
+    <!-- Lyrics -->
+    <string name="section_lyrics">Letras</string>
+    <string name="setting_apple_token">Token de tu cuenta de Apple Music</string>
+    <string name="setting_apple_token_desc">Opcional pero recomendado. Pega la cookie media-user-token de music.apple.com (herramientas de desarrollo del navegador → Aplicación → Cookies) para obtener las letras palabra por palabra de Apple con tu cuenta. Se queda en este dispositivo y solo se envía a Apple. Presiona Listo para guardar; deja el campo vacío para quitarlo.</string>
+    <string name="setting_apple_token_label">media-user-token</string>
+    <string name="setting_lyrics_translation">Traducir letras</string>
+    <string name="setting_lyrics_translation_desc">Muestra una traducción debajo de cada línea, como en la app de Apple Music.</string>
+    <string name="setting_lyrics_translation_language">Idioma de traducción</string>
+    <string name="setting_lyrics_translation_language_desc">Se usa primero la traducción de Apple si existe; después Musixmatch y, por último, Google.</string>
+    <string name="setting_lyrics_translation_language_placeholder">Código de idioma (p. ej., es)</string>
+    <string name="setting_musixmatch_token">Token de Musixmatch</string>
+    <string name="setting_musixmatch_token_desc">Token de usuario de Musixmatch, opcional, para las traducciones. Déjalo vacío para usar uno anónimo.</string>
+    <string name="setting_musixmatch_token_label">Token de usuario de Musixmatch</string>
+    <string name="lyrics_token_set">Guardado</string>
+    <string name="lyrics_token_not_set">Sin configurar</string>
+    <string name="btn_save_token">Guardar</string>
+    <string name="btn_cancel_token">Cancelar</string>
+    <string name="setting_lyrics_extra">Línea extra bajo la letra</string>
+    <string name="setting_lyrics_extra_desc">Muestra una traducción, una romanización (pinyin, romaji…) o ambas bajo cada línea. Se usa primero la de Apple cuando está disponible.</string>
+    <string name="lyrics_extra_off">Desactivada</string>
+    <string name="lyrics_extra_translation">Traducción</string>
+    <string name="lyrics_extra_romanization">Romanización</string>
+    <string name="lyrics_extra_both">Ambas</string>
+    <string name="setting_lyrics_delay">Retraso de la letra</string>
+    <string name="setting_lyrics_delay_desc">Los valores positivos muestran cada línea antes (úsalo cuando el audio va adelantado respecto a la letra); los negativos la muestran después. OK recorre valores predefinidos; izquierda/derecha ajusta de 0.05 s en 0.05 s.</string>
+    <string name="setting_lyrics_delay_placeholder">Milisegundos (p. ej., 500)</string>
+</resources>

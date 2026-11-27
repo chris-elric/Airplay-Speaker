@@ -42,11 +42,21 @@ object Prefs {
     const val LYRICS_VISIBLE = "lyrics_visible"; const val DEF_LYRICS_VISIBLE = true
     const val APPLE_MEDIA_USER_TOKEN = "apple_media_user_token"; const val DEF_APPLE_MEDIA_USER_TOKEN = ""
     const val MUSIXMATCH_TOKEN = "musixmatch_token"; const val DEF_MUSIXMATCH_TOKEN = ""
+    // Legacy on/off switch, only read to migrate to LYRICS_EXTRA_MODE.
     const val LYRICS_TRANSLATION = "lyrics_translation"; const val DEF_LYRICS_TRANSLATION = false
+    const val LYRICS_EXTRA_MODE = "lyrics_extra_mode"
+    const val LYRICS_DELAY_MS = "lyrics_delay_ms"; const val DEF_LYRICS_DELAY_MS = 0
+    const val LYRICS_DELAY_LIMIT_MS = 3000
     const val LYRICS_TRANSLATION_LANGUAGE = "lyrics_translation_language"; const val DEF_LYRICS_TRANSLATION_LANGUAGE = "es"
     const val AUTO_FULLSCREEN = "auto_fullscreen"; const val DEF_AUTO_FULLSCREEN = true
     const val KEEP_SCREEN_ON = "keep_screen_on"; const val DEF_KEEP_SCREEN_ON = true
     const val ADVERTISE_VIDEO = "advertise_video"; const val DEF_ADVERTISE_VIDEO = false
     const val ADVERTISE_AUDIO = "advertise_audio"; const val DEF_ADVERTISE_AUDIO = true
     const val LAUNCH_ON_CONNECT = "launch_on_connect"; const val DEF_LAUNCH_ON_CONNECT = true
+
+    fun lyricsExtraMode(prefs: android.content.SharedPreferences): io.github.jqssun.airplay.lyrics.LyricsExtraMode =
+        io.github.jqssun.airplay.lyrics.LyricsExtraMode.fromKey(
+            prefs.getString(LYRICS_EXTRA_MODE, null),
+            legacyTranslationOn = prefs.getBoolean(LYRICS_TRANSLATION, DEF_LYRICS_TRANSLATION),
+        )
 }

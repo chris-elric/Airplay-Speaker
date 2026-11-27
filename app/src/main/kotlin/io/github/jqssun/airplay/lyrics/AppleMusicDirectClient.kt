@@ -21,15 +21,29 @@ internal class AppleMusicDirectClient(
      * Word-timed lyrics for one Apple Music catalogue song, or null when the
      * account has none, the tokens are rejected, or the request fails.
      */
-    fun fetch(songId: Long, rawUserToken: String, translationLanguage: String): LyricsState? {
+    fun fetch(
+        songId: Long,
+        rawUserToken: String,
+        translationLanguage: String,
+        wantRomanization: Boolean = false,
+    ): LyricsState? {
         val userToken = normalizeUserToken(rawUserToken)
         if (userToken.isEmpty()) return null
         val storefronts = listOf(storefront(userToken) ?: DEFAULT_STOREFRONT, DEFAULT_STOREFRONT).distinct()
 
         for (storefront in storefronts) {
             for (endpoint in listOf("syllable-lyrics", "lyrics")) {
-                val url = "$AMP_BASE/v1/catalog/$storefront/songs/$songId/$endpoint"
+                val baseUrl = "$AMP_BASE/v1/catalog/$storefront/songs/$songId/$endpoint"
+                // Ask Apple for its own translation / transliteration. If the
+                // extended request is refused, the plain one still works.
+                val extendedUrl = localizationQuery(translationLanguage, wantRomanization)
+                    ?.let { baseUrl + it }
+                val url = extendedUrl ?: baseUrl
                 var response = request(url, userToken)
+                if (extendedUrl != null && (response.code == 400 || response.code == 422 || response.code in 500..599)) {
+                    log("Lyrics: Apple Music refused the translation request (HTTP ${response.code}); retrying plain")
+                    response = request(baseUrl, userToken)
+                }
                 if (response.code == 401 || response.code == 403) {
                     // The web token rotates; fetch a fresh one once.
                     developerToken = null
@@ -46,7 +60,11 @@ internal class AppleMusicDirectClient(
                 }
                 val ttml = extractTtml(response.body!!)
                 if (ttml.isBlank()) continue
-                val converted = AppleTtml.convert(ttml, translationLanguage) ?: continue
+                val converted = AppleTtml.convert(
+                    ttml,
+                    translationLanguage,
+                    extractLocalizations(response.body!!),
+                ) ?: continue
                 val state = AppleMusicLyricsClient.parseResponse(converted.json.toString(), songId) ?: continue
                 log("Lyrics: Apple Music $endpoint found for $songId in storefront $storefront")
                 return state.copy(writerCredit = converted.songwriters)
@@ -154,10 +172,56 @@ internal class AppleMusicDirectClient(
         private val scriptSrc = Regex("src=\"([^\"]*?/assets/[^\"]*?\\.js)\"")
         private val cookiePair = Regex("media-user-token=([^;\\s]+)")
 
+        /** Region Apple expects for `l[lyrics]`; a bare "es" becomes Mexican Spanish. */
+        internal fun appleLanguageTag(language: String): String {
+            val code = language.trim()
+            if (code.isEmpty() || code.contains('-')) return code
+            return when (code.lowercase()) {
+                "es" -> "es-MX"
+                "en" -> "en-US"
+                "pt" -> "pt-BR"
+                "fr" -> "fr-FR"
+                "de" -> "de-DE"
+                "it" -> "it-IT"
+                "ja" -> "ja-JP"
+                "ko" -> "ko-KR"
+                "zh" -> "zh-Hans-CN"
+                else -> code
+            }
+        }
+
+        /** "?l[lyrics]=es-MX&l[script]=en-Latn&extend=ttmlLocalizations" or null when neither is wanted. */
+        internal fun localizationQuery(language: String, wantRomanization: Boolean): String? {
+            if (language.isBlank() && !wantRomanization) return null
+            return lyricsQuery(
+                "l[lyrics]" to appleLanguageTag(language),
+                "l[script]" to if (wantRomanization) "en-Latn" else "",
+                "extend" to "ttmlLocalizations",
+            )
+        }
+
+        /** Every TTML document inside `attributes.ttmlLocalizations` (string, list or map). */
+        internal fun extractLocalizations(body: String): List<String> = runCatching {
+            val attributes = JSONObject(body).optJSONArray("data")?.optJSONObject(0)
+                ?.optJSONObject("attributes") ?: return@runCatching emptyList()
+            val out = ArrayList<String>()
+            fun collect(value: Any?) {
+                when (value) {
+                    is String -> if (value.contains("<")) out += value
+                    is JSONObject -> value.keys().forEach { collect(value.opt(it)) }
+                    is org.json.JSONArray -> for (i in 0 until value.length()) collect(value.opt(i))
+                }
+            }
+            collect(attributes.opt("ttmlLocalizations"))
+            out
+        }.getOrDefault(emptyList())
+
         internal fun extractTtml(body: String): String = runCatching {
             val attributes = JSONObject(body).optJSONArray("data")?.optJSONObject(0)
                 ?.optJSONObject("attributes") ?: return@runCatching ""
-            attributes.optString("ttml").ifBlank { attributes.optString("ttmlLocalizations") }
+            attributes.optString("ttml").ifBlank {
+                (attributes.opt("ttmlLocalizations") as? String).orEmpty()
+            }
         }.getOrDefault("")
 
         internal fun findDeveloperToken(text: String): String? = jwt.find(text)?.value

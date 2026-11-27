@@ -127,4 +127,85 @@ class AppleSourcesTest {
             assertEquals("title=$title", 6833728368L, ids.firstOrNull())
         }
     }
+
+    private val ttmlWithLocalizations = """
+        <tt xmlns="http://www.w3.org/ns/ttml" xmlns:itunes="http://music.apple.com/lyric-ttml-internal"
+            xmlns:ttm="http://www.w3.org/ns/ttml#metadata" itunes:timing="Word">
+          <head><metadata><iTunesMetadata>
+            <translations><translation xml:lang="es-MX"><text for="L1">Te quiero mucho</text></translation></translations>
+            <transliterations><transliteration xml:lang="ja-Latn"><text for="L1"><span begin="0:01.000" end="0:02.000">aishi</span> <span begin="0:02.000" end="0:03.000">teru</span><span ttm:role="x-bg"><span begin="0:02.000" end="0:03.000">(yeah)</span></span></text></transliteration></transliterations>
+          </iTunesMetadata></metadata></head>
+          <body><div>
+            <p begin="0:01.000" end="0:03.000" itunes:key="L1" ttm:agent="v1"><span begin="0:01.000" end="0:02.000">愛し</span><span begin="0:02.000" end="0:03.000">てる</span></p>
+          </div></body></tt>
+    """.trimIndent()
+
+    @Test
+    fun appleRomanizationAndTranslationFromLocalizationDocument() {
+        val main = ttmlWithLocalizations.substringBefore("<head>") + "<head><metadata/></head>" +
+            "<body>" + ttmlWithLocalizations.substringAfter("<body>")
+        val result = requireNotNull(AppleTtml.convert(main, "es", listOf(ttmlWithLocalizations)))
+        val line = requireNotNull(AppleMusicLyricsClient.parseResponse(result.json.toString(), 1L)).lines.single()
+        assertEquals("Te quiero mucho", line.translation)
+        assertEquals("aishi teru", line.romanization)
+    }
+
+    @Test
+    fun appleRomanizationInsideMainDocument() {
+        val result = requireNotNull(AppleTtml.convert(ttmlWithLocalizations, ""))
+        val line = requireNotNull(AppleMusicLyricsClient.parseResponse(result.json.toString(), 1L)).lines.single()
+        assertEquals("aishi teru", line.romanization)
+        assertEquals("", line.translation)
+    }
+
+    @Test
+    fun extraModeFiltersWhatTheUiSees() {
+        val state = LyricsState(
+            status = LyricsStatus.SYNCED,
+            lines = listOf(LyricLine(0, "愛", translation = "amor", romanization = "ai")),
+        )
+        val both = state.forMode(LyricsExtraMode.BOTH)
+        assertTrue(both === state)
+        val onlyTranslation = state.forMode(LyricsExtraMode.TRANSLATION).lines.single()
+        assertEquals("amor", onlyTranslation.translation); assertEquals("", onlyTranslation.romanization)
+        val onlyRoman = state.forMode(LyricsExtraMode.ROMANIZATION).lines.single()
+        assertEquals("", onlyRoman.translation); assertEquals("ai", onlyRoman.romanization)
+        val off = state.forMode(LyricsExtraMode.OFF).lines.single()
+        assertEquals("", off.translation + off.romanization)
+        assertEquals(LyricsExtraMode.BOTH, LyricsExtraMode.OFF.next().next().next())
+        assertEquals(LyricsExtraMode.TRANSLATION, LyricsExtraMode.fromKey(null, legacyTranslationOn = true))
+        assertEquals(LyricsExtraMode.OFF, LyricsExtraMode.fromKey("bogus"))
+    }
+
+    @Test
+    fun appleLocalizationRequestQuery() {
+        assertNull(AppleMusicDirectClient.localizationQuery("", false))
+        assertEquals("es-MX", AppleMusicDirectClient.appleLanguageTag("es"))
+        assertEquals("pt-PT", AppleMusicDirectClient.appleLanguageTag("pt-PT"))
+        val query = requireNotNull(AppleMusicDirectClient.localizationQuery("es", true))
+        assertTrue(query.contains("l%5Blyrics%5D=es-MX"))
+        assertTrue(query.contains("l%5Bscript%5D=en-Latn"))
+        assertTrue(query.contains("extend=ttmlLocalizations"))
+        val romanOnly = requireNotNull(AppleMusicDirectClient.localizationQuery("", true))
+        assertTrue(!romanOnly.contains("lyrics"))
+    }
+
+    @Test
+    fun localizationDocumentsAreCollectedFromAnyShape() {
+        val asString = """{"data":[{"attributes":{"ttml":"<tt/>","ttmlLocalizations":"<tt><a/></tt>"}}]}"""
+        assertEquals(1, AppleMusicDirectClient.extractLocalizations(asString).size)
+        val asObject = """{"data":[{"attributes":{"ttmlLocalizations":{"es":"<tt/>","ja":"<tt/>"}}}]}"""
+        assertEquals(2, AppleMusicDirectClient.extractLocalizations(asObject).size)
+        assertEquals(0, AppleMusicDirectClient.extractLocalizations("""{"data":[]}""").size)
+    }
+
+    @Test
+    fun romanizerSkipsLatinAndRunsOnOtherScripts() {
+        assertTrue(!Romanizer.needsRomanization("Hola, ¿cómo estás? 123"))
+        assertTrue(Romanizer.needsRomanization("愛してる"))
+        assertTrue(Romanizer.needsRomanization("사랑해 baby"))
+        val out = Romanizer().romanize(listOf(LyricLine(0, "Hello"), LyricLine(1, "你好")))
+        assertEquals(listOf("", "romaji:你好"), out)
+        assertNull(Romanizer().romanize(listOf(LyricLine(0, "Hello"))))
+    }
 }
