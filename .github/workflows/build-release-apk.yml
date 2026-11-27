@@ -40,6 +40,14 @@ jobs:
           chmod +x ./gradlew
           ./gradlew assembleRelease --stacktrace
 
+      - name: Show languages packed in the APK
+        run: |
+          AAPT2=$(ls -d "$ANDROID_HOME"/build-tools/*/aapt2 | tail -1)
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          "$AAPT2" dump badging "$APK" | grep -E "^locales:|application-label" | cut -c1-300
+          "$AAPT2" dump resources "$APK" | grep -E "string/tv_settings_title" -A4 | head -12
+          "$AAPT2" dump resources "$APK" | grep -c "Ajustes de la TV" | sed 's/^/spanish strings found: /'
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
