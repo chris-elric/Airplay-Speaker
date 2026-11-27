@@ -242,4 +242,14 @@
     <string name="setting_lyrics_delay">Retraso de la letra</string>
     <string name="setting_lyrics_delay_desc">Los valores positivos muestran cada línea antes (úsalo cuando el audio va adelantado respecto a la letra); los negativos la muestran después. OK recorre valores predefinidos; izquierda/derecha ajusta de 0.05 s en 0.05 s.</string>
     <string name="setting_lyrics_delay_placeholder">Milisegundos (p. ej., 500)</string>
+    <string name="tv_home_tagline">Comparte música de forma inalámbrica desde tu\niPhone, iPad o Mac.</string>
+    <string name="tv_home_help_ready">Asegúrate de que tu Mac o dispositivo iOS esté conectado a la misma red Wi-Fi que este dispositivo.\nPara más información, visita apple.com/airplay</string>
+    <string name="tv_home_help_not_ready">Abre Ajustes para iniciar el receptor AirPlay y luego elige este dispositivo desde Música o el Centro de control.</string>
+    <string name="airplay_audio_default">Audio AirPlay</string>
+    <string name="cd_hide_lyrics">Ocultar letra</string>
+    <string name="cd_show_lyrics">Mostrar letra</string>
+    <string name="cd_open_karaoke">Abrir modo Karaoke</string>
+    <string name="cd_disable_karaoke">Desactivar modo Karaoke</string>
+    <string name="cd_enable_karaoke">Activar modo Karaoke</string>
+    <string name="lyrics_written_by">Escrita por:</string>
 </resources>

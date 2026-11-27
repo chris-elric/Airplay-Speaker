@@ -240,4 +240,14 @@
     <string name="setting_lyrics_delay">Lyrics delay</string>
     <string name="setting_lyrics_delay_desc">Positive values show each line earlier (use it when the audio is ahead of the lyrics); negative values show it later. OK cycles presets, left/right fine-tunes by 0.05 s.</string>
     <string name="setting_lyrics_delay_placeholder">Milliseconds (e.g. 500)</string>
+    <string name="tv_home_tagline">Wirelessly share music from your\niPhone, iPad, or Mac.</string>
+    <string name="tv_home_help_ready">Make sure your Mac or iOS device is connected to the same Wi-Fi network as this device.\nFor more information visit apple.com/airplay</string>
+    <string name="tv_home_help_not_ready">Open Settings to start the AirPlay receiver, then choose this device from Music or Control Center.</string>
+    <string name="airplay_audio_default">AirPlay Audio</string>
+    <string name="cd_hide_lyrics">Hide lyrics</string>
+    <string name="cd_show_lyrics">Show lyrics</string>
+    <string name="cd_open_karaoke">Open Karaoke Mode</string>
+    <string name="cd_disable_karaoke">Disable Karaoke Mode</string>
+    <string name="cd_enable_karaoke">Enable Karaoke Mode</string>
+    <string name="lyrics_written_by">Written By:</string>
 </resources>

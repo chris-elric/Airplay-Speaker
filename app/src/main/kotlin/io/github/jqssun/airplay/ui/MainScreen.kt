@@ -1044,7 +1044,7 @@ internal fun NowPlayingContent(
                     Spacer(Modifier.height(8.dp))
                     Text(
                         text = buildString {
-                            append(track.artist.ifEmpty { "AirPlay Audio" })
+                            append(track.artist.ifEmpty { stringResource(R.string.airplay_audio_default) })
                             if (track.album.isNotEmpty()) append("  ·  ${track.album}")
                         },
                         color = muted,

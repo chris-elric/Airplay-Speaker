@@ -219,7 +219,7 @@ private fun TvIdleScreen(
                 )
                 Spacer(Modifier.height((13f * scale).dp))
                 Text(
-                    text = "Wirelessly share music from your\niPhone, iPad, or Mac.",
+                    text = stringResource(R.string.tv_home_tagline),
                     color = foreground.copy(alpha = 0.74f),
                     fontSize = (15f * scale).sp,
                     lineHeight = (18f * scale).sp,
@@ -279,11 +279,9 @@ private fun TvIdleScreen(
                 }
                 Spacer(Modifier.height((13f * scale).dp))
                 Text(
-                    text = if (ready) {
-                        "Make sure your Mac or iOS device is connected to the same Wi-Fi network as this device.\nFor more information visit apple.com/airplay"
-                    } else {
-                        "Open Settings to start the AirPlay receiver, then choose this device from Music or Control Center."
-                    },
+                    text = stringResource(
+                        if (ready) R.string.tv_home_help_ready else R.string.tv_home_help_not_ready
+                    ),
                     color = foreground.copy(alpha = 0.64f),
                     fontSize = (10.5f * scale).sp,
                     lineHeight = (13.5f * scale).sp,

@@ -1155,7 +1155,7 @@ private fun LyricsVisibilityButton(
     ) {
         Icon(
             imageVector = Icons.Default.Lyrics,
-            contentDescription = if (visible) "Hide lyrics" else "Show lyrics",
+            contentDescription = stringResource(if (visible) R.string.cd_hide_lyrics else R.string.cd_show_lyrics),
             tint = tint,
             modifier = Modifier.size((21f * scale).dp),
         )
@@ -1181,7 +1181,7 @@ private fun KaraokeQuickBadge(
     ) {
         Icon(
             imageVector = Icons.Default.Mic,
-            contentDescription = "Open Karaoke Mode",
+            contentDescription = stringResource(R.string.cd_open_karaoke),
             tint = paper.copy(alpha = if (enabled) 1f else 0.88f),
             modifier = Modifier.size((21f * scale).dp),
         )
@@ -1272,7 +1272,7 @@ private fun KaraokeControlPanel(
             ) {
                 Icon(
                     imageVector = Icons.Default.Mic,
-                    contentDescription = if (enabled) "Disable Karaoke Mode" else "Enable Karaoke Mode",
+                    contentDescription = stringResource(if (enabled) R.string.cd_disable_karaoke else R.string.cd_enable_karaoke),
                     tint = paper,
                     modifier = Modifier.size((20f * scale).dp),
                 )
@@ -1367,9 +1367,14 @@ private fun FullScreenMotionArtworkBackdrop(
                         .motionArtworkEdgeFeather(softLayer = true),
                 )
             }
+            // The movie stops at 90 % of the pane; the blurred cover below
+            // dissolves over its hard right edge, so cover and lyrics read as
+            // one surface (like Apple Music) without masking the live video.
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .align(Alignment.CenterStart)
+                    .fillMaxWidth(0.9f)
+                    .fillMaxHeight()
                     .motionArtworkEdgeFade(),
             ) {
                 LoopingMotionArtwork(
@@ -1377,6 +1382,24 @@ private fun FullScreenMotionArtworkBackdrop(
                     playing = playing,
                     fullScreen = true,
                     modifier = Modifier.fillMaxSize(),
+                )
+            }
+            // Static blurred cover, opaque over the movie's right edge and
+            // fading out into the colour field. Because it never changes, the
+            // GPU keeps it as a cached layer instead of re-masking every frame.
+            artwork?.let {
+                Image(
+                    bitmap = it.asImageBitmap(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            scaleX = 1.07f
+                            scaleY = 1.07f
+                        }
+                        .blur(34.dp)
+                        .motionArtworkBlendBand(),
                 )
             }
         }
@@ -1391,8 +1414,8 @@ private fun FullScreenMotionArtworkBackdrop(
                     Brush.horizontalGradient(
                         0f to Color.Black.copy(alpha = 0.035f),
                         0.39f to Color.Black.copy(alpha = 0.07f),
-                        0.47f to Color.Black.copy(alpha = 0.24f),
-                        0.515f to Color.Black.copy(alpha = 0.58f),
+                        0.47f to Color.Black.copy(alpha = 0.16f),
+                        0.515f to Color.Black.copy(alpha = 0.46f),
                         0.6f to Color.Black.copy(alpha = 0.34f),
                         1f to Color.Black.copy(alpha = 0.28f),
                     )
@@ -1410,6 +1433,29 @@ private fun FullScreenMotionArtworkBackdrop(
 }
 
 /**
+ * Alpha mask for the blurred cover that sits over the movie's right edge:
+ * invisible over the sharp video, fully opaque where the video ends (90 %),
+ * then fading out into the background colour field.
+ */
+private fun Modifier.motionArtworkBlendBand(): Modifier =
+    graphicsLayer {
+        compositingStrategy = CompositingStrategy.Offscreen
+    }.drawWithContent {
+        drawContent()
+        drawRect(
+            brush = Brush.horizontalGradient(
+                0f to Color.Transparent,
+                0.70f to Color.Transparent,
+                0.80f to Color.White.copy(alpha = 0.55f),
+                0.88f to Color.White,
+                0.91f to Color.White,
+                1f to Color.Transparent,
+            ),
+            blendMode = BlendMode.DstIn,
+        )
+    }
+
+/**
  * Soft dark edges for the playing movie, drawn as plain gradients on top of
  * it. The previous version masked the video with an offscreen DstIn layer,
  * which re-rendered a full-pane buffer for every video frame.
@@ -1417,20 +1463,11 @@ private fun FullScreenMotionArtworkBackdrop(
 private fun Modifier.motionArtworkEdgeFade(): Modifier = drawWithContent {
     drawContent()
     drawRect(
-        brush = Brush.horizontalGradient(
-            0f to Color.Black.copy(alpha = 0.32f),
-            0.055f to Color.Transparent,
-            0.76f to Color.Transparent,
-            0.88f to Color.Black.copy(alpha = 0.5f),
-            1f to Color.Black,
-        ),
-    )
-    drawRect(
         brush = Brush.verticalGradient(
-            0f to Color.Black.copy(alpha = 0.4f),
-            0.075f to Color.Transparent,
-            0.86f to Color.Transparent,
-            1f to Color.Black.copy(alpha = 0.5f),
+            0f to Color.Black.copy(alpha = 0.3f),
+            0.07f to Color.Transparent,
+            0.9f to Color.Transparent,
+            1f to Color.Black.copy(alpha = 0.4f),
         ),
     )
 }
@@ -3233,10 +3270,11 @@ private fun LyricsWriterCredit(
         animationSpec = tween(220, easing = FastOutSlowInEasing),
         label = "lyricsWriterCreditBlur",
     )
-    val styledCredit = remember(writerCredit) {
+    val writtenByLabel = stringResource(R.string.lyrics_written_by)
+    val styledCredit = remember(writerCredit, writtenByLabel) {
         buildAnnotatedString {
             withStyle(SpanStyle(fontWeight = FontWeight.Black)) {
-                append("Written By:")
+                append(writtenByLabel)
             }
             append(" ")
             withStyle(SpanStyle(fontWeight = FontWeight.Medium)) {
