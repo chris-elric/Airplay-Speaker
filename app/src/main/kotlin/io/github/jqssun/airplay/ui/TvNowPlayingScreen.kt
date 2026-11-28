@@ -73,6 +73,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -99,6 +100,7 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.rotate
@@ -132,6 +134,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import io.github.jqssun.airplay.R
@@ -246,7 +249,6 @@ internal fun TvNowPlayingScreen(
     val track by viewModel.trackInfo.collectAsState()
     val lyrics by viewModel.lyrics.collectAsState()
     val playing by viewModel.audioPlaying.collectAsState()
-    val audioPositionMs by viewModel.audioPositionMs.collectAsState()
     val audioOutputStatus by viewModel.audioOutputStatus.collectAsState()
     val appVolume by viewModel.appVolume.collectAsState()
     val appVolumeActivity by viewModel.appVolumeActivity.collectAsState()
@@ -296,11 +298,11 @@ internal fun TvNowPlayingScreen(
     // The motion pane is close to square, so prefer Apple's square rendition.
     // A wide rendition remains the fallback when it is the only asset.
     val fullScreenMotionUrl = animatedArtworkUrl ?: animatedArtworkFullScreenUrl
-    val useFullScreenMotionArtwork =
-        motionArtworkEnabled &&
-            fullscreenMotionArtwork &&
-            showLyricsPage &&
-            !fullScreenMotionUrl.isNullOrBlank()
+    // The full-screen layout is driven only by the user's option. Without an
+    // animated cover it falls back to the sharpest still image available.
+    val useFullScreenMotionArtwork = fullscreenMotionArtwork && showLyricsPage
+    val fullScreenVideoUrl =
+        if (motionArtworkEnabled) fullScreenMotionUrl.orEmpty() else ""
     val minimumQueueSelection = if (previousTrack != null) -1 else 0
     val maximumQueueSelection = upNextTracks.size
 
@@ -502,8 +504,10 @@ internal fun TvNowPlayingScreen(
         ) {
             FullScreenMotionArtworkBackdrop(
                 artwork = animatedArtworkPreview ?: displayArtwork ?: track.coverArt,
-                motionUrl = fullScreenMotionUrl.orEmpty(),
+                motionUrl = fullScreenVideoUrl,
                 playing = playing,
+                primary = primary,
+                secondary = secondary,
                 modifier = Modifier.fillMaxSize(),
             )
         }
@@ -547,26 +551,23 @@ internal fun TvNowPlayingScreen(
         AnimatedVisibility(
             visible = useFullScreenMotionArtwork,
             modifier = Modifier
-                .align(Alignment.BottomStart)
-                .fillMaxWidth(0.5f)
-                .padding(bottom = (28f * scale).dp),
-            enter = fadeIn(tween(540, delayMillis = 180)) +
-                slideInHorizontally(tween(520)) { -it / 8 },
-            exit = fadeOut(tween(220)) + slideOutHorizontally(tween(300)) { -it / 10 },
+                .align(Alignment.TopStart)
+                .padding(
+                    start = maxWidth * 0.55f,
+                    end = (40f * scale).dp,
+                    top = (30f * scale).dp,
+                ),
+            enter = fadeIn(tween(540, delayMillis = 180)),
+            exit = fadeOut(tween(220)),
         ) {
-            Box(
-                modifier = Modifier.fillMaxWidth(),
-                contentAlignment = Alignment.Center,
-            ) {
-                FullScreenTrackBadge(
-                    track = track,
-                    primary = primary,
-                    paper = paper,
-                    scale = scale,
-                    playing = playing,
-                    audioMeterLevelProvider = audioMeterLevelProvider,
-                )
-            }
+            FullScreenTrackHeader(
+                track = track,
+                primary = primary,
+                paper = paper,
+                scale = scale,
+                playing = playing,
+                audioMeterLevelProvider = audioMeterLevelProvider,
+            )
         }
 
         AnimatedVisibility(
@@ -576,25 +577,23 @@ internal fun TvNowPlayingScreen(
                 .padding(
                     start = animateDpAsState(
                         targetValue = (
-                            if (useFullScreenMotionArtwork) 555f * scale else 430f * scale
-                            ).dp,
+                            if (useFullScreenMotionArtwork) {
+                                maxWidth * 0.55f
+                            } else {
+                                (430f * scale).dp
+                            }
+                            ),
                         animationSpec = tween(460, easing = FastOutSlowInEasing),
                         label = "lyricsMotionArtworkBoundary",
                     ).value,
                     end = ((if (useFullScreenMotionArtwork) 28f else 54f) * scale).dp,
-                    top = ((if (useFullScreenMotionArtwork) 28f else 30f) * scale).dp,
+                    top = ((if (useFullScreenMotionArtwork) 118f else 30f) * scale).dp,
                     bottom = ((if (useFullScreenMotionArtwork) 28f else 30f) * scale).dp,
                 ),
             enter = fadeIn(tween(420)) + slideInHorizontally(tween(520)) { it / 12 },
             exit = fadeOut(tween(280)) + slideOutHorizontally(tween(380)) { it / 14 },
         ) {
-            MotionLyricsPanel(
-                enabled = useFullScreenMotionArtwork,
-                primary = primary,
-                paper = paper,
-                scale = scale,
-                modifier = Modifier.fillMaxSize(),
-            ) {
+            Box(modifier = Modifier.fillMaxSize()) {
                 DisplaySyncedLyricsStage(
                     lyrics = lyrics,
                     viewModel = viewModel,
@@ -694,7 +693,6 @@ internal fun TvNowPlayingScreen(
         ) {
             NoLyricsPlaybackFooter(
                 viewModel = viewModel,
-                sourcePositionMs = audioPositionMs,
                 durationMs = track.durationMs,
                 audioOutputStatus = audioOutputStatus,
                 playing = playing,
@@ -726,7 +724,7 @@ internal fun TvNowPlayingScreen(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = if (appVolume == 0) "APP MUTED" else "APP VOLUME  $appVolume%",
+                    text = if (appVolume == 0) stringResource(R.string.label_app_muted) else stringResource(R.string.label_app_volume, appVolume),
                     color = paper,
                     fontSize = (13f * scale).sp,
                     fontWeight = FontWeight.Bold,
@@ -1004,7 +1002,6 @@ private fun EqualQueueTrackCard(
 @Composable
 private fun NoLyricsPlaybackFooter(
     viewModel: MainViewModel,
-    sourcePositionMs: Long,
     durationMs: Long,
     audioOutputStatus: String,
     playing: Boolean,
@@ -1013,6 +1010,7 @@ private fun NoLyricsPlaybackFooter(
     muted: Color,
     scale: Float,
 ) {
+    val sourcePositionMs by viewModel.audioPositionMs.collectAsState()
     val positionMs = rememberDisplaySyncedPosition(
         sourcePositionMs = sourcePositionMs,
         viewModel = viewModel,
@@ -1024,7 +1022,7 @@ private fun NoLyricsPlaybackFooter(
         0f
     }.coerceIn(0f, 1f)
     val status = audioOutputStatus.ifBlank {
-        "ALAC LOSSLESS · 16-bit / 44.1 kHz"
+        stringResource(R.string.label_alac_lossless_format)
     }
 
     Column(
@@ -1218,7 +1216,7 @@ private fun KaraokeControlPanel(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
-            text = "SMART KARAOKE",
+            text = stringResource(R.string.karaoke_title),
             color = paper.copy(alpha = 0.72f),
             fontSize = (8.1f * scale).sp,
             fontWeight = FontWeight.Bold,
@@ -1253,7 +1251,7 @@ private fun KaraokeControlPanel(
         }
         Spacer(Modifier.height((8f * scale).dp))
         Text(
-            text = if (enabled) "$vocalLevel% VOCALS" else "ORIGINAL MIX",
+            text = if (enabled) stringResource(R.string.karaoke_vocals, vocalLevel) else stringResource(R.string.karaoke_original),
             color = paper.copy(alpha = 0.76f),
             fontSize = (8.2f * scale).sp,
             fontWeight = FontWeight.SemiBold,
@@ -1293,7 +1291,7 @@ private fun KaraokeControlPanel(
         }
         Spacer(Modifier.height((10f * scale).dp))
         Text(
-            text = "UP / DOWN  VOCALS\nLEFT / RIGHT  SELECT",
+            text = stringResource(R.string.karaoke_hint),
             color = paper.copy(alpha = 0.54f),
             fontSize = (7.2f * scale).sp,
             fontWeight = FontWeight.Medium,
@@ -1332,104 +1330,130 @@ private fun FullScreenMotionArtworkBackdrop(
     artwork: Bitmap?,
     motionUrl: String,
     playing: Boolean,
+    primary: Color,
+    secondary: Color,
     modifier: Modifier = Modifier,
 ) {
-    Box(
-        modifier = modifier.background(Color.Black.copy(alpha = 0.18f)),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .align(Alignment.CenterStart)
-                .fillMaxWidth(0.5f)
-                .fillMaxHeight()
-                .clipToBounds(),
-            contentAlignment = Alignment.Center,
-        ) {
-            // Keep Apple's preview frame underneath the decoder so a slow
-            // network or rendition switch never reveals an empty video pane.
-            artwork?.let {
-                Image(
-                    bitmap = it.asImageBitmap(),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        // The enlarged, blurred still becomes a soft spill
-                        // around the movie instead of exposing a hard
-                        // rectangular edge when the foreground is feathered.
-                        .graphicsLayer {
-                            scaleX = 1.07f
-                            scaleY = 1.07f
-                            alpha = 0.86f
-                        }
-                        .blur(30.dp)
-                        .motionArtworkEdgeFeather(softLayer = true),
-                )
-            }
-            // The movie stops at 90 % of the pane; the blurred cover below
-            // dissolves over its hard right edge, so cover and lyrics read as
-            // one surface (like Apple Music) without masking the live video.
-            Box(
+    // Blurred once on a tiny bitmap (no per-frame RenderEffect), then simply
+    // stretched: the colour field is cheap to draw even on weak TV GPUs.
+    val soft = remember(artwork) { artwork?.let { createSoftBlurBitmap(it) } }
+    Box(modifier = modifier) {
+        // One continuous blurred colour field under cover AND lyrics.
+        if (soft != null) {
+            Image(
+                bitmap = soft.asImageBitmap(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                filterQuality = FilterQuality.Medium,
                 modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .fillMaxWidth(0.9f)
-                    .fillMaxHeight()
-                    .motionArtworkEdgeFade(),
-            ) {
-                LoopingMotionArtwork(
-                    url = motionUrl,
-                    playing = playing,
-                    fullScreen = true,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
-            // Static blurred cover, opaque over the movie's right edge and
-            // fading out into the colour field. Because it never changes, the
-            // GPU keeps it as a cached layer instead of re-masking every frame.
-            artwork?.let {
-                Image(
-                    bitmap = it.asImageBitmap(),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer {
-                            scaleX = 1.07f
-                            scaleY = 1.07f
-                        }
-                        .blur(34.dp)
-                        .motionArtworkBlendBand(),
-                )
-            }
+                    .fillMaxSize()
+                    .graphicsLayer { alpha = 0.96f },
+            )
         }
-
-        // Blend the video into the album-colour field beneath this layer. The
-        // lyric panel supplies its own dark glass rather than turning the
-        // entire right half into a flat black block.
+        // Palette tint keeps the lyric side coloured like the cover.
         Box(
             Modifier
                 .fillMaxSize()
                 .background(
                     Brush.horizontalGradient(
-                        0f to Color.Black.copy(alpha = 0.035f),
-                        0.39f to Color.Black.copy(alpha = 0.07f),
-                        0.47f to Color.Black.copy(alpha = 0.16f),
-                        0.515f to Color.Black.copy(alpha = 0.46f),
-                        0.6f to Color.Black.copy(alpha = 0.34f),
-                        1f to Color.Black.copy(alpha = 0.28f),
+                        0f to Color.Transparent,
+                        0.5f to primary.copy(alpha = 0.16f),
+                        1f to secondary.copy(alpha = 0.22f),
                     )
                 )
+        )
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .fillMaxWidth(0.62f)
+                .fillMaxHeight()
+                .clipToBounds(),
+        ) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .fillMaxWidth(0.9f)
+                    .fillMaxHeight(),
+            ) {
+                // Still first: the video never reveals an empty pane.
+                artwork?.let {
+                    Image(
+                        bitmap = it.asImageBitmap(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+                if (motionUrl.isNotBlank()) {
+                    LoopingMotionArtwork(
+                        url = motionUrl,
+                        playing = playing,
+                        fullScreen = true,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+            // Static pre-blurred cover dissolving over the sharp cover's edge
+            // (a cached layer: it never changes while the video plays).
+            if (soft != null) {
+                Image(
+                    bitmap = soft.asImageBitmap(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    filterQuality = FilterQuality.Medium,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .motionArtworkBlendBand(),
+                )
+            }
+        }
+        // Light scrim only on the lyric side so text stays clear (no box).
+        Box(
+            Modifier
+                .fillMaxSize()
                 .background(
-                    Brush.verticalGradient(
-                        0f to Color.Black.copy(alpha = 0.28f),
-                        0.18f to Color.Transparent,
-                        0.72f to Color.Transparent,
-                        1f to Color.Black.copy(alpha = 0.58f),
+                    Brush.horizontalGradient(
+                        0f to Color.Transparent,
+                        0.5f to Color.Transparent,
+                        0.62f to Color.Black.copy(alpha = 0.22f),
+                        1f to Color.Black.copy(alpha = 0.34f),
                     )
                 )
         )
     }
+}
+
+/** Downscales and box-blurs a cover once; drawn stretched it reads as a heavy blur. */
+private fun createSoftBlurBitmap(source: Bitmap): Bitmap {
+    val safe = if (source.config == Bitmap.Config.HARDWARE) {
+        source.copy(Bitmap.Config.ARGB_8888, false) ?: return source
+    } else {
+        source
+    }
+    val w = 48
+    val h = (safe.height * w / safe.width.coerceAtLeast(1)).coerceIn(8, 96)
+    val small = Bitmap.createScaledBitmap(safe, w, h, true)
+    val px = IntArray(w * h)
+    small.getPixels(px, 0, w, 0, 0, w, h)
+    var src = px
+    var dst = IntArray(w * h)
+    repeat(3) {
+        for (y in 0 until h) for (x in 0 until w) {
+            var a = 0; var r = 0; var g = 0; var b = 0; var n = 0
+            for (dy in -2..2) for (dx in -2..2) {
+                val xx = (x + dx).coerceIn(0, w - 1)
+                val yy = (y + dy).coerceIn(0, h - 1)
+                val c = src[yy * w + xx]
+                a += c ushr 24; r += (c shr 16) and 255
+                g += (c shr 8) and 255; b += c and 255; n++
+            }
+            dst[y * w + x] = ((a / n) shl 24) or ((r / n) shl 16) or ((g / n) shl 8) or (b / n)
+        }
+        val t = src; src = dst; dst = t
+    }
+    val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+    out.setPixels(src, 0, w, 0, 0, w, h)
+    return out
 }
 
 /**
@@ -1506,54 +1530,7 @@ private fun Modifier.motionArtworkEdgeFeather(softLayer: Boolean): Modifier =
     }
 
 @Composable
-private fun MotionLyricsPanel(
-    enabled: Boolean,
-    primary: Color,
-    paper: Color,
-    scale: Float,
-    modifier: Modifier = Modifier,
-    content: @Composable () -> Unit,
-) {
-    val shape = RoundedCornerShape((24f * scale).dp)
-    Box(
-        modifier = if (enabled) {
-            modifier
-                .shadow(
-                    elevation = (10f * scale).dp,
-                    shape = shape,
-                    clip = false,
-                    ambientColor = primary.copy(alpha = 0.16f),
-                    spotColor = Color.Black.copy(alpha = 0.68f),
-                )
-                .clip(shape)
-                .background(Color.Black.copy(alpha = 0.62f))
-                .background(
-                    Brush.linearGradient(
-                        0f to primary.copy(alpha = 0.075f),
-                        0.46f to Color.Transparent,
-                        1f to Color.Black.copy(alpha = 0.2f),
-                    )
-                )
-                .border(
-                    width = 1.dp,
-                    color = paper.copy(alpha = 0.2f),
-                    shape = shape,
-                )
-                .padding(
-                    horizontal = (20f * scale).dp,
-                    vertical = (4f * scale).dp,
-                )
-        } else {
-            modifier
-        },
-        contentAlignment = Alignment.CenterStart,
-    ) {
-        content()
-    }
-}
-
-@Composable
-private fun FullScreenTrackBadge(
+private fun FullScreenTrackHeader(
     track: TrackInfo,
     primary: Color,
     paper: Color,
@@ -1561,21 +1538,7 @@ private fun FullScreenTrackBadge(
     playing: Boolean,
     audioMeterLevelProvider: () -> AudioMeterLevels,
 ) {
-    Column(
-        modifier = Modifier
-            .width((294f * scale).dp)
-            .liquidGlass(
-                shape = RoundedCornerShape((18f * scale).dp),
-                selected = playing,
-                tint = mix(primary, paper, 0.2f),
-                strength = 0.7f,
-            )
-            .padding(
-                horizontal = (15f * scale).dp,
-                vertical = (12f * scale).dp,
-            ),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
+    Column(modifier = Modifier.fillMaxWidth()) {
         TitleWithEqualizer(
             title = track.title,
             color = paper,
@@ -1583,32 +1546,19 @@ private fun FullScreenTrackBadge(
             scale = scale,
             playing = playing,
             audioMeterLevelProvider = audioMeterLevelProvider,
-            titleFontSize = 16f,
-            titleLineHeight = 20f,
-            titleFontWeight = FontWeight.SemiBold,
+            titleFontSize = 22f,
+            titleLineHeight = 27f,
+            titleFontWeight = FontWeight.Bold,
             modifier = Modifier.fillMaxWidth(),
         )
         if (track.artist.isNotBlank()) {
-            Spacer(Modifier.height((3f * scale).dp))
+            Spacer(Modifier.height((4f * scale).dp))
             BouncingFadingText(
                 text = track.artist,
-                color = paper.copy(alpha = 0.72f),
+                color = paper.copy(alpha = 0.78f),
                 style = TextStyle(
-                    fontSize = (11.5f * scale).sp,
+                    fontSize = (15f * scale).sp,
                     fontWeight = FontWeight.Medium,
-                    textAlign = TextAlign.Center,
-                ),
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-        if (track.album.isNotBlank()) {
-            Spacer(Modifier.height((2f * scale).dp))
-            BouncingFadingText(
-                text = track.album,
-                color = paper.copy(alpha = 0.48f),
-                style = TextStyle(
-                    fontSize = (9.4f * scale).sp,
-                    textAlign = TextAlign.Center,
                 ),
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -1928,7 +1878,6 @@ private fun MinimalArtworkColumn(
                         scaleY = if (artworkMotionEnabled) 1.07f + (breathe - 1f) else 1.07f
                         alpha = if (artworkMotionEnabled) glow else 0.24f
                     }
-                    .blur((25f * scale).dp)
                     .background(
                         Brush.radialGradient(
                             listOf(primary, secondary.copy(alpha = 0.55f), Color.Transparent)
@@ -2105,6 +2054,15 @@ private fun BouncingFadingText(
     val overflowPx = (contentWidthPx - containerWidthPx).coerceAtLeast(0)
     val travel = remember { Animatable(0f) }
     val pixelsPerSecond = with(LocalDensity.current) { 36.dp.toPx() }
+    // The edge fades only change at the two ends of the scroll. Reading the
+    // raw animated value in the draw phase would re-rasterise the whole
+    // masked layer on every frame (the cause of the choppy marquee).
+    val leftEdgeClear by remember {
+        derivedStateOf { travel.value <= 1f }
+    }
+    val rightEdgeClear by remember(overflowPx) {
+        derivedStateOf { travel.value >= overflowPx - 1f }
+    }
 
     LaunchedEffect(text, overflowPx) {
         travel.snapTo(0f)
@@ -2137,8 +2095,8 @@ private fun BouncingFadingText(
             .drawWithContent {
                 drawContent()
                 if (overflowPx > 1) {
-                    val leftAlpha = if (travel.value > 1f) 0f else 1f
-                    val rightAlpha = if (travel.value < overflowPx - 1f) 0f else 1f
+                    val leftAlpha = if (leftEdgeClear) 1f else 0f
+                    val rightAlpha = if (rightEdgeClear) 1f else 0f
                     drawRect(
                         brush = Brush.horizontalGradient(
                             0f to Color.White.copy(alpha = leftAlpha),
@@ -2349,12 +2307,57 @@ private fun LoopingMotionArtwork(
                 playbackFailed = true
             }
         }
+        // Diagnostics + safety net: log the rendition actually decoded and,
+        // only if this TV really drops frames (weak decoder), step down to a
+        // 720p-class rendition instead of letting the cover crawl at ~10 fps.
+        var heavyDropWindows = 0
+        var steppedDown = false
+        val analytics = object : AnalyticsListener {
+            override fun onVideoInputFormatChanged(
+                eventTime: AnalyticsListener.EventTime,
+                format: androidx.media3.common.Format,
+                decoderReuseEvaluation: androidx.media3.exoplayer.DecoderReuseEvaluation?,
+            ) {
+                android.util.Log.i(
+                    "MotionArtwork",
+                    "format ${format.width}x${format.height} @${format.frameRate}fps " +
+                        "${format.bitrate / 1000} kbps ${format.sampleMimeType}",
+                )
+            }
+
+            override fun onDroppedVideoFrames(
+                eventTime: AnalyticsListener.EventTime,
+                droppedFrames: Int,
+                elapsedMs: Long,
+            ) {
+                val perSecond = droppedFrames * 1000f / elapsedMs.coerceAtLeast(1L)
+                android.util.Log.w(
+                    "MotionArtwork",
+                    "dropped $droppedFrames frames in ${elapsedMs}ms (%.1f/s)".format(perSecond),
+                )
+                if (perSecond > 10f) heavyDropWindows++ else heavyDropWindows = 0
+                if (heavyDropWindows >= 3 && !steppedDown) {
+                    steppedDown = true
+                    (player.trackSelector as? DefaultTrackSelector)?.let { selector ->
+                        selector.setParameters(
+                            selector.buildUponParameters()
+                                .setMaxVideoSize(1280, 1280)
+                                .setMaxVideoBitrate(7_000_000)
+                                .setForceHighestSupportedBitrate(false)
+                        )
+                        android.util.Log.w("MotionArtwork", "stepped down to <=1280px")
+                    }
+                }
+            }
+        }
         player.addListener(listener)
+        player.addAnalyticsListener(analytics)
         player.setMediaItem(MediaItem.fromUri(url))
         player.prepare()
         player.playWhenReady = playing
         onDispose {
             player.removeListener(listener)
+            player.removeAnalyticsListener(analytics)
             player.release()
         }
     }
@@ -2571,7 +2574,6 @@ private fun LyricsRailGlow(
                 scaleX = 0.98f + breath * 0.035f
                 scaleY = 0.97f + breath * 0.045f
             }
-            .blur((14f * scale).dp)
             .background(
                 Brush.radialGradient(
                     0f to glow.copy(alpha = 0.25f),

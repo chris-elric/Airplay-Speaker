@@ -252,4 +252,17 @@
     <string name="cd_disable_karaoke">Desactivar modo Karaoke</string>
     <string name="cd_enable_karaoke">Activar modo Karaoke</string>
     <string name="lyrics_written_by">Escrita por:</string>
+    <string name="tv_choose_device">ELIGE ESTE DISPOSITIVO</string>
+    <string name="tv_status_ready">LISTO</string>
+    <string name="tv_status_offline">SIN CONEXIÓN</string>
+    <string name="tv_status_online">%1$d EN LÍNEA</string>
+    <string name="label_alac_lossless">ALAC SIN PÉRDIDA</string>
+    <string name="label_alac_lossless_format">ALAC SIN PÉRDIDA · 16 bits / 44.1 kHz</string>
+    <string name="label_live_airplay">AIRPLAY EN VIVO</string>
+    <string name="label_app_muted">APP SILENCIADA</string>
+    <string name="label_app_volume">VOLUMEN DE LA APP  %1$d%%</string>
+    <string name="karaoke_title">KARAOKE INTELIGENTE</string>
+    <string name="karaoke_vocals">%1$d%% VOCES</string>
+    <string name="karaoke_original">MEZCLA ORIGINAL</string>
+    <string name="karaoke_hint">ARRIBA / ABAJO  VOCES\nIZQUIERDA / DERECHA  SELECCIONAR</string>
 </resources>

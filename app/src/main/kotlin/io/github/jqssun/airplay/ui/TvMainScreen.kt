@@ -259,7 +259,7 @@ private fun TvIdleScreen(
                         ),
                 ) {
                     Text(
-                        text = if (ready) "CHOOSE THIS DEVICE" else "RECEIVER OFFLINE",
+                        text = if (ready) stringResource(R.string.tv_choose_device) else stringResource(R.string.tv_receiver_offline),
                         color = foreground.copy(alpha = 0.86f),
                         fontSize = (11f * scale).sp,
                         lineHeight = (14f * scale).sp,
@@ -478,8 +478,8 @@ private fun TvNavigationRail(
             )
             Spacer(Modifier.height(7.dp))
             Text(
-                if (connections > 0) "$connections ONLINE"
-                else if (state == ServerState.RUNNING) "READY" else "OFFLINE",
+                if (connections > 0) stringResource(R.string.tv_status_online, connections)
+                else if (state == ServerState.RUNNING) stringResource(R.string.tv_status_ready) else stringResource(R.string.tv_status_offline),
                 color = Color(0xFFA9AAB4),
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.SemiBold,
@@ -654,7 +654,7 @@ private fun TvReceiverHome(
                     )
                     Spacer(Modifier.height(14.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        TvFeatureChip("ALAC LOSSLESS")
+                        TvFeatureChip(stringResource(R.string.label_alac_lossless))
                         TvFeatureChip("16-BIT / 44.1 kHz")
                     }
                     Spacer(Modifier.weight(1f))

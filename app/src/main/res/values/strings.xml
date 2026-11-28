@@ -250,4 +250,17 @@
     <string name="cd_disable_karaoke">Disable Karaoke Mode</string>
     <string name="cd_enable_karaoke">Enable Karaoke Mode</string>
     <string name="lyrics_written_by">Written By:</string>
+    <string name="tv_choose_device">CHOOSE THIS DEVICE</string>
+    <string name="tv_status_ready">READY</string>
+    <string name="tv_status_offline">OFFLINE</string>
+    <string name="tv_status_online">%1$d ONLINE</string>
+    <string name="label_alac_lossless">ALAC LOSSLESS</string>
+    <string name="label_alac_lossless_format">ALAC LOSSLESS · 16-bit / 44.1 kHz</string>
+    <string name="label_live_airplay">LIVE AIRPLAY</string>
+    <string name="label_app_muted">APP MUTED</string>
+    <string name="label_app_volume">APP VOLUME  %1$d%%</string>
+    <string name="karaoke_title">SMART KARAOKE</string>
+    <string name="karaoke_vocals">%1$d%% VOCALS</string>
+    <string name="karaoke_original">ORIGINAL MIX</string>
+    <string name="karaoke_hint">UP / DOWN  VOCALS\nLEFT / RIGHT  SELECT</string>
 </resources>

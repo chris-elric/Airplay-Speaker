@@ -972,7 +972,7 @@ internal fun NowPlayingContent(
                         modifier = Modifier.border(1.dp, Color(0x559EF2D0), RoundedCornerShape(50))
                     ) {
                         Text(
-                            "LIVE AIRPLAY",
+                            stringResource(R.string.label_live_airplay),
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
                             color = mint,
                             style = MaterialTheme.typography.labelSmall,
@@ -1018,7 +1018,7 @@ internal fun NowPlayingContent(
                             tint = Color.White.copy(alpha = 0.88f)
                         )
                         Text(
-                            "ALAC LOSSLESS",
+                            stringResource(R.string.label_alac_lossless),
                             modifier = Modifier.align(Alignment.BottomStart).padding(22.dp),
                             color = Color.White.copy(alpha = 0.75f),
                             style = MaterialTheme.typography.labelSmall,

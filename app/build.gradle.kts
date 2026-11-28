@@ -108,6 +108,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel)
     implementation(libs.androidx.datastore.prefs)
     implementation(libs.androidx.media)
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.exoplayer.hls)
     implementation(libs.media3.ui.compose.material3)
